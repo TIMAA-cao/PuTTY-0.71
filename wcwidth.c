@@ -69,12 +69,12 @@ struct interval {
 };
 
 /* auxiliary function for binary search in interval table */
-static bool bisearch(unsigned int ucs, const struct interval *table, int max) {
+static int bisearch(unsigned int ucs, const struct interval *table, int max) {
   int min = 0;
   int mid;
 
   if (ucs < table[0].first || ucs > table[max].last)
-    return false;
+    return 0;
   while (max >= min) {
     mid = (min + max) / 2;
     if (ucs > table[mid].last)
@@ -82,10 +82,10 @@ static bool bisearch(unsigned int ucs, const struct interval *table, int max) {
     else if (ucs < table[mid].first)
       max = mid - 1;
     else
-      return true;
+      return 1;
   }
 
-  return false;
+  return 0;
 }
 
 

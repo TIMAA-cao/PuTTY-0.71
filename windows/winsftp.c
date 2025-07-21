@@ -10,14 +10,17 @@
 #include "putty.h"
 #include "psftp.h"
 #include "ssh.h"
+#include "int64.h"
 #include "winsecur.h"
 
-int filexfer_get_userpass_input(Seat *seat, prompts_t *p, bufchain *input)
+char *get_ttymode(void *frontend, const char *mode) { return NULL; }
+
+int get_userpass_input(prompts_t *p, const unsigned char *in, int inlen)
 {
     int ret;
-    ret = cmdline_get_passwd_input(p);
+    ret = cmdline_get_passwd_input(p, in, inlen);
     if (ret == -1)
-	ret = console_get_userpass_input(p);
+	ret = console_get_userpass_input(p, in, inlen);
     return ret;
 }
 
@@ -25,7 +28,7 @@ void platform_get_x11_auth(struct X11Display *display, Conf *conf)
 {
     /* Do nothing, therefore no auth. */
 }
-const bool platform_uses_x11_unix_by_default = true;
+const int platform_uses_x11_unix_by_default = TRUE;
 
 /* ----------------------------------------------------------------------
  * File access abstraction.
@@ -63,16 +66,11 @@ char *psftp_lcd(char *dir)
 char *psftp_getcwd(void)
 {
     char *ret = snewn(256, char);
-    size_t len = GetCurrentDirectory(256, ret);
+    int len = GetCurrentDirectory(256, ret);
     if (len > 256)
 	ret = sresize(ret, len, char);
     GetCurrentDirectory(len, ret);
     return ret;
-}
-
-static inline uint64_t uint64_from_words(uint32_t hi, uint32_t lo)
-{
-    return (((uint64_t)hi) << 32) | lo;
 }
 
 #define TIME_POSIX_TO_WIN(t, ft) do { \
@@ -93,7 +91,7 @@ struct RFile {
     HANDLE h;
 };
 
-RFile *open_existing_file(const char *name, uint64_t *size,
+RFile *open_existing_file(const char *name, uint64 *size,
 			  unsigned long *mtime, unsigned long *atime,
                           long *perms)
 {
@@ -111,7 +109,8 @@ RFile *open_existing_file(const char *name, uint64_t *size,
     if (size) {
         DWORD lo, hi;
         lo = GetFileSize(h, &hi);
-        *size = uint64_from_words(hi, lo);
+        size->lo = lo;
+        size->hi = hi;
     }
 
     if (mtime || atime) {
@@ -131,8 +130,10 @@ RFile *open_existing_file(const char *name, uint64_t *size,
 
 int read_from_file(RFile *f, void *buffer, int length)
 {
+    int ret;
     DWORD read;
-    if (!ReadFile(f->h, buffer, length, &read, NULL))
+    ret = ReadFile(f->h, buffer, length, &read, NULL);
+    if (!ret)
 	return -1;		       /* error */
     else
 	return read;
@@ -164,7 +165,7 @@ WFile *open_new_file(const char *name, long perms)
     return ret;
 }
 
-WFile *open_existing_wfile(const char *name, uint64_t *size)
+WFile *open_existing_wfile(const char *name, uint64 *size)
 {
     HANDLE h;
     WFile *ret;
@@ -180,7 +181,8 @@ WFile *open_existing_wfile(const char *name, uint64_t *size)
     if (size) {
         DWORD lo, hi;
         lo = GetFileSize(h, &hi);
-        *size = uint64_from_words(hi, lo);
+        size->lo = lo;
+        size->hi = hi;
     }
 
     return ret;
@@ -188,8 +190,10 @@ WFile *open_existing_wfile(const char *name, uint64_t *size)
 
 int write_to_file(WFile *f, void *buffer, int length)
 {
+    int ret;
     DWORD written;
-    if (!WriteFile(f->h, buffer, length, &written, NULL))
+    ret = WriteFile(f->h, buffer, length, &written, NULL);
+    if (!ret)
 	return -1;		       /* error */
     else
 	return written;
@@ -211,7 +215,7 @@ void close_wfile(WFile *f)
 
 /* Seek offset bytes through file, from whence, where whence is
    FROM_START, FROM_CURRENT, or FROM_END */
-int seek_file(WFile *f, uint64_t offset, int whence)
+int seek_file(WFile *f, uint64 offset, int whence)
 {
     DWORD movemethod;
 
@@ -230,7 +234,7 @@ int seek_file(WFile *f, uint64_t offset, int whence)
     }
 
     {
-        LONG lo = offset & 0xFFFFFFFFU, hi = offset >> 32;
+        LONG lo = offset.lo, hi = offset.hi;
         SetFilePointer(f->h, lo, &hi, movemethod);
     }
     
@@ -240,12 +244,16 @@ int seek_file(WFile *f, uint64_t offset, int whence)
 	return 0;
 }
 
-uint64_t get_file_posn(WFile *f)
+uint64 get_file_posn(WFile *f)
 {
+    uint64 ret;
     LONG lo, hi = 0;
 
     lo = SetFilePointer(f->h, 0L, &hi, FILE_CURRENT);
-    return uint64_from_words(hi, lo);
+    ret.lo = lo;
+    ret.hi = hi;
+
+    return ret;
 }
 
 int file_type(const char *name)
@@ -266,7 +274,7 @@ struct DirHandle {
     char *name;
 };
 
-DirHandle *open_directory(const char *name, const char **errmsg)
+DirHandle *open_directory(const char *name)
 {
     HANDLE h;
     WIN32_FIND_DATA fdat;
@@ -276,10 +284,8 @@ DirHandle *open_directory(const char *name, const char **errmsg)
     /* Enumerate files in dir `foo'. */
     findfile = dupcat(name, "/*", NULL);
     h = FindFirstFile(findfile, &fdat);
-    if (h == INVALID_HANDLE_VALUE) {
-        *errmsg = win_strerror(GetLastError());
+    if (h == INVALID_HANDLE_VALUE)
 	return NULL;
-    }
     sfree(findfile);
 
     ret = snew(DirHandle);
@@ -294,7 +300,8 @@ char *read_filename(DirHandle *dir)
 
 	if (!dir->name) {
 	    WIN32_FIND_DATA fdat;
-	    if (!FindNextFile(dir->h, &fdat))
+	    int ok = FindNextFile(dir->h, &fdat);
+	    if (!ok)
 		return NULL;
 	    else
 		dir->name = dupstr(fdat.cFileName);
@@ -326,7 +333,7 @@ void close_directory(DirHandle *dir)
     sfree(dir);
 }
 
-int test_wildcard(const char *name, bool cmdline)
+int test_wildcard(const char *name, int cmdline)
 {
     HANDLE fh;
     WIN32_FIND_DATA fdat;
@@ -350,7 +357,7 @@ struct WildcardMatcher {
     char *srcpath;
 };
 
-char *stripslashes(const char *str, bool local)
+char *stripslashes(const char *str, int local)
 {
     char *p;
 
@@ -388,7 +395,7 @@ WildcardMatcher *begin_wildcard_matching(const char *name)
     ret = snew(WildcardMatcher);
     ret->h = h;
     ret->srcpath = dupstr(name);
-    last = stripslashes(ret->srcpath, true);
+    last = stripslashes(ret->srcpath, 1);
     *last = '\0';
     if (fdat.cFileName[0] == '.' &&
 	(fdat.cFileName[1] == '\0' ||
@@ -404,8 +411,9 @@ char *wildcard_get_filename(WildcardMatcher *dir)
 {
     while (!dir->name) {
 	WIN32_FIND_DATA fdat;
+	int ok = FindNextFile(dir->h, &fdat);
 
-	if (!FindNextFile(dir->h, &fdat))
+	if (!ok)
 	    return NULL;
 
 	if (fdat.cFileName[0] == '.' &&
@@ -433,29 +441,25 @@ void finish_wildcard_matching(WildcardMatcher *dir)
     sfree(dir);
 }
 
-bool vet_filename(const char *name)
+int vet_filename(const char *name)
 {
     if (strchr(name, '/') || strchr(name, '\\') || strchr(name, ':'))
-	return false;
+	return FALSE;
 
     if (!name[strspn(name, ".")])      /* entirely composed of dots */
-	return false;
+	return FALSE;
 
-    return true;
+    return TRUE;
 }
 
-bool create_directory(const char *name)
+int create_directory(const char *name)
 {
     return CreateDirectory(name, NULL) != 0;
 }
 
 char *dir_file_cat(const char *dir, const char *file)
 {
-    ptrlen dir_pl = ptrlen_from_asciz(dir);
-    return dupcat(
-        dir, (ptrlen_endswith(dir_pl, PTRLEN_LITERAL("\\"), NULL) ||
-              ptrlen_endswith(dir_pl, PTRLEN_LITERAL("/"), NULL)) ? "" : "\\",
-        file, NULL);
+    return dupcat(dir, "\\", file, NULL);
 }
 
 /* ----------------------------------------------------------------------
@@ -467,7 +471,7 @@ char *dir_file_cat(const char *dir, const char *file)
  */
 static SOCKET sftp_ssh_socket = INVALID_SOCKET;
 static HANDLE netevent = INVALID_HANDLE_VALUE;
-char *do_select(SOCKET skt, bool startup)
+char *do_select(SOCKET skt, int startup)
 {
     int events;
     if (startup)
@@ -479,7 +483,7 @@ char *do_select(SOCKET skt, bool startup)
 	if (startup) {
 	    events = (FD_CONNECT | FD_READ | FD_WRITE |
 		      FD_OOB | FD_CLOSE | FD_ACCEPT);
-	    netevent = CreateEvent(NULL, false, false, NULL);
+	    netevent = CreateEvent(NULL, FALSE, FALSE, NULL);
 	} else {
 	    events = 0;
 	}
@@ -534,13 +538,14 @@ int do_eventsel_loop(HANDLE other_event)
     else
 	otherindex = -1;
 
-    n = WaitForMultipleObjects(nallhandles, handles, false, ticks);
+    n = WaitForMultipleObjects(nallhandles, handles, FALSE, ticks);
 
     if ((unsigned)(n - WAIT_OBJECT_0) < (unsigned)nhandles) {
 	handle_got_event(handles[n - WAIT_OBJECT_0]);
     } else if (netindex >= 0 && n == WAIT_OBJECT_0 + netindex) {
 	WSANETWORKEVENTS things;
 	SOCKET socket;
+	extern SOCKET first_socket(int *), next_socket(int *);
 	int i, socketstate;
 
 	/*
@@ -582,7 +587,8 @@ int do_eventsel_loop(HANDLE other_event)
 		};
 		int e;
 
-		noise_ultralight(NOISE_SOURCE_IOID, socket);
+		noise_ultralight(socket);
+		noise_ultralight(things.lNetworkEvents);
 
 		for (e = 0; e < lenof(eventtypes); e++)
 		    if (things.lNetworkEvents & eventtypes[e].mask) {
@@ -700,7 +706,7 @@ static DWORD WINAPI command_read_thread(void *param)
     return 0;
 }
 
-char *ssh_sftp_get_cmdline(const char *prompt, bool no_fds_ok)
+char *ssh_sftp_get_cmdline(const char *prompt, int no_fds_ok)
 {
     int ret;
     struct command_read_ctx actx, *ctx = &actx;
@@ -719,7 +725,7 @@ char *ssh_sftp_get_cmdline(const char *prompt, bool no_fds_ok)
      * Create a second thread to read from stdin. Process network
      * and timing events until it terminates.
      */
-    ctx->event = CreateEvent(NULL, false, false, NULL);
+    ctx->event = CreateEvent(NULL, FALSE, FALSE, NULL);
     ctx->line = NULL;
 
     hThread = CreateThread(NULL, 0, command_read_thread, ctx, 0, &threadid);
@@ -745,7 +751,7 @@ char *ssh_sftp_get_cmdline(const char *prompt, bool no_fds_ok)
 void platform_psftp_pre_conn_setup(void)
 {
     if (restricted_acl) {
-        lp_eventlog(default_logpolicy, "Running with restricted process ACL");
+	logevent(NULL, "Running with restricted process ACL");
     }
 }
 

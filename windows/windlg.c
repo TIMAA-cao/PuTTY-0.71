@@ -42,40 +42,29 @@ static struct controlbox *ctrlbox;
 static struct winctrls ctrls_base, ctrls_panel;
 static struct dlgparam dp;
 
-#define LOGEVENT_INITIAL_MAX 128
-#define LOGEVENT_CIRCULAR_MAX 128
+static char **events = NULL;
+static int nevents = 0, negsize = 0;
 
-static char *events_initial[LOGEVENT_INITIAL_MAX];
-static char *events_circular[LOGEVENT_CIRCULAR_MAX];
-static int ninitial = 0, ncircular = 0, circular_first = 0;
+extern Conf *conf;		       /* defined in window.c */
 
 #define PRINTER_DISABLED_STRING "None (printing disabled)"
 
 void force_normal(HWND hwnd)
 {
-    static bool recurse = false;
+    static int recurse = 0;
 
     WINDOWPLACEMENT wp;
 
     if (recurse)
 	return;
-    recurse = true;
+    recurse = 1;
 
     wp.length = sizeof(wp);
     if (GetWindowPlacement(hwnd, &wp) && wp.showCmd == SW_SHOWMAXIMIZED) {
 	wp.showCmd = SW_SHOWNORMAL;
 	SetWindowPlacement(hwnd, &wp);
     }
-    recurse = false;
-}
-
-static char *getevent(int i)
-{
-    if (i < ninitial)
-        return events_initial[i];
-    if ((i -= ninitial) < ncircular)
-        return events_circular[(circular_first + i) % LOGEVENT_CIRCULAR_MAX];
-    return NULL;
+    recurse = 0;
 }
 
 static INT_PTR CALLBACK LogProc(HWND hwnd, UINT msg,
@@ -95,12 +84,9 @@ static INT_PTR CALLBACK LogProc(HWND hwnd, UINT msg,
 	    SendDlgItemMessage(hwnd, IDN_LIST, LB_SETTABSTOPS, 2,
 			       (LPARAM) tabs);
 	}
-	for (i = 0; i < ninitial; i++)
+	for (i = 0; i < nevents; i++)
 	    SendDlgItemMessage(hwnd, IDN_LIST, LB_ADDSTRING,
-			       0, (LPARAM) events_initial[i]);
-	for (i = 0; i < ncircular; i++)
-	    SendDlgItemMessage(hwnd, IDN_LIST, LB_ADDSTRING,
-			       0, (LPARAM) events_circular[(circular_first + i) % LOGEVENT_CIRCULAR_MAX]);
+			       0, (LPARAM) events[i]);
 	return 1;
       case WM_COMMAND:
 	switch (LOWORD(wParam)) {
@@ -141,27 +127,27 @@ static INT_PTR CALLBACK LogProc(HWND hwnd, UINT msg,
 		    size = 0;
 		    for (i = 0; i < count; i++)
 			size +=
-			    strlen(getevent(selitems[i])) + sizeof(sel_nl);
+			    strlen(events[selitems[i]]) + sizeof(sel_nl);
 
 		    clipdata = snewn(size, char);
 		    if (clipdata) {
 			char *p = clipdata;
 			for (i = 0; i < count; i++) {
-			    char *q = getevent(selitems[i]);
+			    char *q = events[selitems[i]];
 			    int qlen = strlen(q);
 			    memcpy(p, q, qlen);
 			    p += qlen;
 			    memcpy(p, sel_nl, sizeof(sel_nl));
 			    p += sizeof(sel_nl);
 			}
-			write_aclip(CLIP_SYSTEM, clipdata, size, true);
+			write_aclip(NULL, clipdata, size, TRUE);
 			sfree(clipdata);
 		    }
 		    sfree(selitems);
 
-		    for (i = 0; i < (ninitial + ncircular); i++)
+		    for (i = 0; i < nevents; i++)
 			SendDlgItemMessage(hwnd, IDN_LIST, LB_SETSEL,
-					   false, i);
+					   FALSE, i);
 		}
 	    }
 	    return 0;
@@ -228,7 +214,7 @@ static INT_PTR CALLBACK AboutProc(HWND hwnd, UINT msg,
 	switch (LOWORD(wParam)) {
 	  case IDOK:
 	  case IDCANCEL:
-	    EndDialog(hwnd, true);
+	    EndDialog(hwnd, TRUE);
 	    return 0;
 	  case IDA_LICENCE:
 	    EnableWindow(hwnd, 0);
@@ -247,7 +233,7 @@ static INT_PTR CALLBACK AboutProc(HWND hwnd, UINT msg,
 	}
 	return 0;
       case WM_CLOSE:
-	EndDialog(hwnd, true);
+	EndDialog(hwnd, TRUE);
 	return 0;
     }
     return 0;
@@ -426,7 +412,7 @@ static INT_PTR CALLBACK GenericMainDlgProc(HWND hwnd, UINT msg,
 		MoveWindow(hwnd,
 			   (rs.right + rs.left + rd.left - rd.right) / 2,
 			   (rs.bottom + rs.top + rd.top - rd.bottom) / 2,
-			   rd.right - rd.left, rd.bottom - rd.top, true);
+			   rd.right - rd.left, rd.bottom - rd.top, TRUE);
 	}
 
 	/*
@@ -449,7 +435,7 @@ static INT_PTR CALLBACK GenericMainDlgProc(HWND hwnd, UINT msg,
 				      hwnd, (HMENU) IDCX_TVSTATIC, hinst,
 				      NULL);
 	    font = SendMessage(hwnd, WM_GETFONT, 0, 0);
-	    SendMessage(tvstatic, WM_SETFONT, font, MAKELPARAM(true, 0));
+	    SendMessage(tvstatic, WM_SETFONT, font, MAKELPARAM(TRUE, 0));
 
 	    r.left = 3;
 	    r.right = r.left + 95;
@@ -466,7 +452,7 @@ static INT_PTR CALLBACK GenericMainDlgProc(HWND hwnd, UINT msg,
 				      hwnd, (HMENU) IDCX_TREEVIEW, hinst,
 				      NULL);
 	    font = SendMessage(hwnd, WM_GETFONT, 0, 0);
-	    SendMessage(treeview, WM_SETFONT, font, MAKELPARAM(true, 0));
+	    SendMessage(treeview, WM_SETFONT, font, MAKELPARAM(TRUE, 0));
 	    tvfaff.treeview = treeview;
 	    memset(tvfaff.lastat, 0, sizeof(tvfaff.lastat));
 	}
@@ -592,7 +578,7 @@ static INT_PTR CALLBACK GenericMainDlgProc(HWND hwnd, UINT msg,
 
             i = TreeView_GetSelection(((LPNMHDR) lParam)->hwndFrom);
  
- 	    SendMessage (hwnd, WM_SETREDRAW, false, 0);
+ 	    SendMessage (hwnd, WM_SETREDRAW, FALSE, 0);
  
 	    item.hItem = i;
 	    item.pszText = buffer;
@@ -621,8 +607,8 @@ static INT_PTR CALLBACK GenericMainDlgProc(HWND hwnd, UINT msg,
 
 	    dlg_refresh(NULL, &dp);    /* set up control values */
  
-	    SendMessage (hwnd, WM_SETREDRAW, true, 0);
- 	    InvalidateRect (hwnd, NULL, true);
+	    SendMessage (hwnd, WM_SETREDRAW, TRUE, 0);
+ 	    InvalidateRect (hwnd, NULL, TRUE);
 
 	    SetFocus(((LPNMHDR) lParam)->hwndFrom);	/* ensure focus stays */
 	    return 0;
@@ -691,13 +677,13 @@ void defuse_showwindow(void)
     }
 }
 
-bool do_config(void)
+int do_config(void)
 {
-    bool ret;
+    int ret;
 
     ctrlbox = ctrl_new_box();
-    setup_config_box(ctrlbox, false, 0, 0);
-    win_setup_config_box(ctrlbox, &dp.hwnd, has_help(), false, 0);
+    setup_config_box(ctrlbox, FALSE, 0, 0);
+    win_setup_config_box(ctrlbox, &dp.hwnd, has_help(), FALSE, 0);
     dp_init(&dp);
     winctrl_init(&ctrls_base);
     winctrl_init(&ctrls_panel);
@@ -707,7 +693,7 @@ bool do_config(void)
     dp.errtitle = dupprintf("%s Error", appname);
     dp.data = conf;
     dlg_auto_set_fixed_pitch_flag(&dp);
-    dp.shortcuts['g'] = true;	       /* the treeview: `Cate&gory' */
+    dp.shortcuts['g'] = TRUE;	       /* the treeview: `Cate&gory' */
 
     ret =
 	SaneDialogBox(hinst, MAKEINTRESOURCE(IDD_MAINBOX), NULL,
@@ -721,18 +707,17 @@ bool do_config(void)
     return ret;
 }
 
-bool do_reconfig(HWND hwnd, int protcfginfo)
+int do_reconfig(HWND hwnd, int protcfginfo)
 {
     Conf *backup_conf;
-    bool ret;
-    int protocol;
+    int ret, protocol;
 
     backup_conf = conf_copy(conf);
 
     ctrlbox = ctrl_new_box();
     protocol = conf_get_int(conf, CONF_protocol);
-    setup_config_box(ctrlbox, true, protocol, protcfginfo);
-    win_setup_config_box(ctrlbox, &dp.hwnd, has_help(), true, protocol);
+    setup_config_box(ctrlbox, TRUE, protocol, protcfginfo);
+    win_setup_config_box(ctrlbox, &dp.hwnd, has_help(), TRUE, protocol);
     dp_init(&dp);
     winctrl_init(&ctrls_base);
     winctrl_init(&ctrls_panel);
@@ -742,7 +727,7 @@ bool do_reconfig(HWND hwnd, int protcfginfo)
     dp.errtitle = dupprintf("%s Error", appname);
     dp.data = conf;
     dlg_auto_set_fixed_pitch_flag(&dp);
-    dp.shortcuts['g'] = true;	       /* the treeview: `Cate&gory' */
+    dp.shortcuts['g'] = TRUE;	       /* the treeview: `Cate&gory' */
 
     ret = SaneDialogBox(hinst, MAKEINTRESOURCE(IDD_MAINBOX), NULL,
 		  GenericMainDlgProc);
@@ -760,47 +745,32 @@ bool do_reconfig(HWND hwnd, int protcfginfo)
     return ret;
 }
 
-static void win_gui_eventlog(LogPolicy *lp, const char *string)
+void logevent(void *frontend, const char *string)
 {
     char timebuf[40];
-    char **location;
     struct tm tm;
+
+    log_eventlog(logctx, string);
+
+    if (nevents >= negsize) {
+	negsize += 64;
+	events = sresize(events, negsize, char *);
+    }
 
     tm=ltime();
     strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S\t", &tm);
 
-    if (ninitial < LOGEVENT_INITIAL_MAX)
-        location = &events_initial[ninitial];
-    else
-        location = &events_circular[(circular_first + ncircular) % LOGEVENT_CIRCULAR_MAX];
-
-    if (*location)
-        sfree(*location);
-    *location = dupcat(timebuf, string, (const char *)NULL);
+    events[nevents] = snewn(strlen(timebuf) + strlen(string) + 1, char);
+    strcpy(events[nevents], timebuf);
+    strcat(events[nevents], string);
     if (logbox) {
 	int count;
 	SendDlgItemMessage(logbox, IDN_LIST, LB_ADDSTRING,
-			   0, (LPARAM) *location);
+			   0, (LPARAM) events[nevents]);
 	count = SendDlgItemMessage(logbox, IDN_LIST, LB_GETCOUNT, 0, 0);
 	SendDlgItemMessage(logbox, IDN_LIST, LB_SETTOPINDEX, count - 1, 0);
     }
-    if (ninitial < LOGEVENT_INITIAL_MAX) {
-        ninitial++;
-    } else if (ncircular < LOGEVENT_CIRCULAR_MAX) {
-        ncircular++;
-    } else if (ncircular == LOGEVENT_CIRCULAR_MAX) {
-        circular_first = (circular_first + 1) % LOGEVENT_CIRCULAR_MAX;
-        sfree(events_circular[circular_first]);
-        events_circular[circular_first] = dupstr("..");
-    }
-}
-
-static void win_gui_logging_error(LogPolicy *lp, const char *event)
-{
-    /* Send 'can't open log file' errors to the terminal window.
-     * (Marked as stderr, although terminal.c won't care.) */
-    seat_stderr_pl(win_seat, ptrlen_from_asciz(event));
-    seat_stderr_pl(win_seat, PTRLEN_LITERAL("\r\n"));
+    nevents++;
 }
 
 void showeventlog(HWND hwnd)
@@ -818,10 +788,9 @@ void showabout(HWND hwnd)
     DialogBox(hinst, MAKEINTRESOURCE(IDD_ABOUTBOX), hwnd, AboutProc);
 }
 
-int win_seat_verify_ssh_host_key(
-    Seat *seat, const char *host, int port,
-    const char *keytype, char *keystr, char *fingerprint,
-    void (*callback)(void *ctx, int result), void *ctx)
+int verify_ssh_host_key(void *frontend, char *host, int port,
+                        const char *keytype, char *keystr, char *fingerprint,
+                        void (*callback)(void *ctx, int result), void *ctx)
 {
     int ret;
 
@@ -903,14 +872,13 @@ int win_seat_verify_ssh_host_key(
  * Ask whether the selected algorithm is acceptable (since it was
  * below the configured 'warn' threshold).
  */
-int win_seat_confirm_weak_crypto_primitive(
-    Seat *seat, const char *algtype, const char *algname,
-    void (*callback)(void *ctx, int result), void *ctx)
+int askalg(void *frontend, const char *algtype, const char *algname,
+	   void (*callback)(void *ctx, int result), void *ctx)
 {
     static const char mbtitle[] = "%s Security Alert";
     static const char msg[] =
 	"The first %s supported by the server\n"
-	"is %s, which is below the configured\n"
+	"is %.64s, which is below the configured\n"
 	"warning threshold.\n"
 	"Do you want to continue with this connection?\n";
     char *message, *title;
@@ -929,9 +897,8 @@ int win_seat_confirm_weak_crypto_primitive(
 	return 0;
 }
 
-int win_seat_confirm_weak_cached_hostkey(
-    Seat *seat, const char *algname, const char *betteralgs,
-    void (*callback)(void *ctx, int result), void *ctx)
+int askhk(void *frontend, const char *algname, const char *betteralgs,
+          void (*callback)(void *ctx, int result), void *ctx)
 {
     static const char mbtitle[] = "%s Security Alert";
     static const char msg[] =
@@ -961,9 +928,8 @@ int win_seat_confirm_weak_cached_hostkey(
  * Ask whether to wipe a session log file before writing to it.
  * Returns 2 for wipe, 1 for append, 0 for cancel (don't log).
  */
-static int win_gui_askappend(LogPolicy *lp, Filename *filename,
-                             void (*callback)(void *ctx, int result),
-                             void *ctx)
+int askappend(void *frontend, Filename *filename,
+	      void (*callback)(void *ctx, int result), void *ctx)
 {
     static const char msgtemplate[] =
 	"The session log file \"%.*s\" already exists.\n"
@@ -994,13 +960,6 @@ static int win_gui_askappend(LogPolicy *lp, Filename *filename,
     else
 	return 0;
 }
-
-static const LogPolicyVtable default_logpolicy_vt = {
-    win_gui_eventlog,
-    win_gui_askappend,
-    win_gui_logging_error,
-};
-LogPolicy default_logpolicy[1] = {{ &default_logpolicy_vt }};
 
 /*
  * Warn about the obsolescent key file format.

@@ -12,9 +12,10 @@
 #include "terminal.h"
 #include "ldisc.h"
 
-void lpage_send(Ldisc *ldisc,
-		int codepage, const char *buf, int len, bool interactive)
+void lpage_send(void *handle,
+		int codepage, const char *buf, int len, int interactive)
 {
+    Ldisc ldisc = (Ldisc)handle;
     wchar_t *widebuffer = 0;
     int widesize = 0;
     int wclen;
@@ -33,8 +34,9 @@ void lpage_send(Ldisc *ldisc,
     sfree(widebuffer);
 }
 
-void luni_send(Ldisc *ldisc, const wchar_t *widebuf, int len, bool interactive)
+void luni_send(void *handle, const wchar_t *widebuf, int len, int interactive)
 {
+    Ldisc ldisc = (Ldisc)handle;
     int ratio = (in_utf(ldisc->term))?3:1;
     char *linebuffer;
     int linesize;
@@ -65,12 +67,26 @@ void luni_send(Ldisc *ldisc, const wchar_t *widebuf, int len, bool interactive)
 		}
 	    }
 
-            p += encode_utf8(p, ch);
+	    if (ch < 0x80) {
+		*p++ = (char) (ch);
+	    } else if (ch < 0x800) {
+		*p++ = (char) (0xC0 | (ch >> 6));
+		*p++ = (char) (0x80 | (ch & 0x3F));
+	    } else if (ch < 0x10000) {
+		*p++ = (char) (0xE0 | (ch >> 12));
+		*p++ = (char) (0x80 | ((ch >> 6) & 0x3F));
+		*p++ = (char) (0x80 | (ch & 0x3F));
+	    } else {
+		*p++ = (char) (0xF0 | (ch >> 18));
+		*p++ = (char) (0x80 | ((ch >> 12) & 0x3F));
+		*p++ = (char) (0x80 | ((ch >> 6) & 0x3F));
+		*p++ = (char) (0x80 | (ch & 0x3F));
+	    }
 	}
     } else {
 	int rv;
 	rv = wc_to_mb(ldisc->term->ucsdata->line_codepage, 0, widebuf, len,
-		      linebuffer, linesize, NULL, ldisc->term->ucsdata);
+		      linebuffer, linesize, NULL, NULL, ldisc->term->ucsdata);
 	if (rv >= 0)
 	    p = linebuffer + rv;
 	else

@@ -13,21 +13,26 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/time.h>
+#ifndef HAVE_NO_SYS_SELECT_H
+#include <sys/select.h>
+#endif
 
 #include "putty.h"
 #include "storage.h"
 #include "ssh.h"
 
-bool console_batch_mode = false;
+int console_batch_mode = FALSE;
+
+static void *console_logctx = NULL;
 
 static struct termios orig_termios_stderr;
-static bool stderr_is_a_tty;
+static int stderr_is_a_tty;
 
 void stderr_tty_init()
 {
     /* Ensure that if stderr is a tty, we can get it back to a sane state. */
     if ((flags & FLAG_STDERR_TTY) && isatty(STDERR_FILENO)) {
-	stderr_is_a_tty = true;
+	stderr_is_a_tty = TRUE;
 	tcgetattr(STDERR_FILENO, &orig_termios_stderr);
     }
 }
@@ -58,58 +63,16 @@ void cleanup_exit(int code)
     exit(code);
 }
 
-/*
- * Various error message and/or fatal exit functions.
- */
-void console_print_error_msg(const char *prefix, const char *msg)
+void set_busy_status(void *frontend, int status)
 {
-    struct termios cf;
-    premsg(&cf);
-    fputs(prefix, stderr);
-    fputs(": ", stderr);
-    fputs(msg, stderr);
-    fputc('\n', stderr);
-    fflush(stderr);
-    postmsg(&cf);
 }
 
-void console_print_error_msg_fmt_v(
-    const char *prefix, const char *fmt, va_list ap)
+void update_specials_menu(void *frontend)
 {
-    char *msg = dupvprintf(fmt, ap);
-    console_print_error_msg(prefix, msg);
-    sfree(msg);
 }
 
-void console_print_error_msg_fmt(const char *prefix, const char *fmt, ...)
+void notify_remote_exit(void *frontend)
 {
-    va_list ap;
-    va_start(ap, fmt);
-    console_print_error_msg_fmt_v(prefix, fmt, ap);
-    va_end(ap);
-}
-
-void modalfatalbox(const char *fmt, ...)
-{
-    va_list ap;
-    va_start(ap, fmt);
-    console_print_error_msg_fmt_v("FATAL ERROR", fmt, ap);
-    va_end(ap);
-    cleanup_exit(1);
-}
-
-void nonfatal(const char *fmt, ...)
-{
-    va_list ap;
-    va_start(ap, fmt);
-    console_print_error_msg_fmt_v("ERROR", fmt, ap);
-    va_end(ap);
-}
-
-void console_connection_fatal(Seat *seat, const char *msg)
-{
-    console_print_error_msg("FATAL ERROR", msg);
-    cleanup_exit(1);
 }
 
 void timer_change_notify(unsigned long next)
@@ -119,13 +82,12 @@ void timer_change_notify(unsigned long next)
 /*
  * Wrapper around Unix read(2), suitable for use on a file descriptor
  * that's been set into nonblocking mode. Handles EAGAIN/EWOULDBLOCK
- * by means of doing a one-fd poll and then trying again; all other
- * errors (including errors from poll) are returned to the caller.
+ * by means of doing a one-fd select and then trying again; all other
+ * errors (including errors from select) are returned to the caller.
  */
 static int block_and_read(int fd, void *buf, size_t len)
 {
     int ret;
-    pollwrapper *pw = pollwrap_new();
 
     while ((ret = read(fd, buf, len)) < 0 && (
 #ifdef EAGAIN
@@ -134,27 +96,26 @@ static int block_and_read(int fd, void *buf, size_t len)
 #ifdef EWOULDBLOCK
                (errno == EWOULDBLOCK) ||
 #endif
-               false)) {
+               0)) {
 
-        pollwrap_clear(pw);
-        pollwrap_add_fd_rwx(pw, fd, SELECT_R);
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(fd, &rfds);
         do {
-            ret = pollwrap_poll_endless(pw);
+            ret = select(fd+1, &rfds, NULL, NULL, NULL);
         } while (ret < 0 && errno == EINTR);
         assert(ret != 0);
         if (ret < 0)
             return ret;
-        assert(pollwrap_check_fd_rwx(pw, fd, SELECT_R));
+        assert(FD_ISSET(fd, &rfds));
     }
 
-    pollwrap_free(pw);
     return ret;
 }
 
-int console_verify_ssh_host_key(
-    Seat *seat, const char *host, int port,
-    const char *keytype, char *keystr, char *fingerprint,
-    void (*callback)(void *ctx, int result), void *ctx)
+int verify_ssh_host_key(void *frontend, char *host, int port,
+                        const char *keytype, char *keystr, char *fingerprint,
+                        void (*callback)(void *ctx, int result), void *ctx)
 {
     int ret;
 
@@ -258,9 +219,12 @@ int console_verify_ssh_host_key(
     }
 }
 
-int console_confirm_weak_crypto_primitive(
-    Seat *seat, const char *algtype, const char *algname,
-    void (*callback)(void *ctx, int result), void *ctx)
+/*
+ * Ask whether the selected algorithm is acceptable (since it was
+ * below the configured 'warn' threshold).
+ */
+int askalg(void *frontend, const char *algtype, const char *algname,
+	   void (*callback)(void *ctx, int result), void *ctx)
 {
     static const char msg[] =
 	"The first %s supported by the server is\n"
@@ -306,9 +270,8 @@ int console_confirm_weak_crypto_primitive(
     }
 }
 
-int console_confirm_weak_cached_hostkey(
-    Seat *seat, const char *algname, const char *betteralgs,
-    void (*callback)(void *ctx, int result), void *ctx)
+int askhk(void *frontend, const char *algname, const char *betteralgs,
+          void (*callback)(void *ctx, int result), void *ctx)
 {
     static const char msg[] =
 	"The first host key type we have stored for this server\n"
@@ -364,9 +327,8 @@ int console_confirm_weak_cached_hostkey(
  * Ask whether to wipe a session log file before writing to it.
  * Returns 2 for wipe, 1 for append, 0 for cancel (don't log).
  */
-static int console_askappend(LogPolicy *lp, Filename *filename,
-                             void (*callback)(void *ctx, int result),
-                             void *ctx)
+int askappend(void *frontend, Filename *filename,
+	      void (*callback)(void *ctx, int result), void *ctx)
 {
     static const char msgtemplate[] =
 	"The session log file \"%.*s\" already exists.\n"
@@ -414,29 +376,6 @@ static int console_askappend(LogPolicy *lp, Filename *filename,
 	return 0;
 }
 
-bool console_antispoof_prompt = true;
-bool console_set_trust_status(Seat *seat, bool trusted)
-{
-    if (console_batch_mode || !is_interactive() || !console_antispoof_prompt) {
-        /*
-         * In batch mode, we don't need to worry about the server
-         * mimicking our interactive authentication, because the user
-         * already knows not to expect any.
-         *
-         * If standard input isn't connected to a terminal, likewise,
-         * because even if the server did send a spoof authentication
-         * prompt, the user couldn't respond to it via the terminal
-         * anyway.
-         *
-         * We also vacuously return success if the user has purposely
-         * disabled the antispoof prompt.
-         */
-        return true;
-    }
-
-    return false;
-}
-
 /*
  * Warn about the obsolescent key file format.
  * 
@@ -466,30 +405,20 @@ void old_keyfile_warning(void)
     postmsg(&cf);
 }
 
-static void console_logging_error(LogPolicy *lp, const char *string)
+void console_provide_logctx(void *logctx)
 {
-    /* Errors setting up logging are considered important, so they're
-     * displayed to standard error even when not in verbose mode */
+    console_logctx = logctx;
+}
+
+void logevent(void *frontend, const char *string)
+{
     struct termios cf;
-    premsg(&cf);
-    fprintf(stderr, "%s\n", string);
-    fflush(stderr);
-    postmsg(&cf);
-}
-
-
-static void console_eventlog(LogPolicy *lp, const char *string)
-{
-    /* Ordinary Event Log entries are displayed in the same way as
-     * logging errors, but only in verbose mode */
-    if (flags & FLAG_VERBOSE)
-        console_logging_error(lp, string);
-}
-
-StripCtrlChars *console_stripctrl_new(
-    Seat *seat, BinarySink *bs_out, SeatInteractionContext sic)
-{
-    return stripctrl_new(bs_out, false, 0);
+    if ((flags & FLAG_STDERR) && (flags & FLAG_VERBOSE))
+        premsg(&cf);
+    if (console_logctx)
+	log_eventlog(console_logctx, string);
+    if ((flags & FLAG_STDERR) && (flags & FLAG_VERBOSE))
+        postmsg(&cf);
 }
 
 /*
@@ -517,13 +446,18 @@ static void console_close(FILE *outfp, int infd)
         fclose(outfp);             /* will automatically close infd too */
 }
 
-static void console_write(FILE *outfp, ptrlen data)
+static void console_prompt_text(FILE *outfp, const char *data, int len)
 {
-    fwrite(data.ptr, 1, data.len, outfp);
+    int i;
+
+    for (i = 0; i < len; i++)
+	if ((data[i] & 0x60) || (data[i] == '\n'))
+	    fputc(data[i], outfp);
     fflush(outfp);
 }
 
-int console_get_userpass_input(prompts_t *p)
+int console_get_userpass_input(prompts_t *p, const unsigned char *in,
+                               int inlen)
 {
     size_t curr_prompt;
     FILE *outfp = NULL;
@@ -548,17 +482,17 @@ int console_get_userpass_input(prompts_t *p)
      */
     /* We only print the `name' caption if we have to... */
     if (p->name_reqd && p->name) {
-	ptrlen plname = ptrlen_from_asciz(p->name);
-	console_write(outfp, plname);
-        if (!ptrlen_endswith(plname, PTRLEN_LITERAL("\n"), NULL))
-	    console_write(outfp, PTRLEN_LITERAL("\n"));
+	size_t l = strlen(p->name);
+	console_prompt_text(outfp, p->name, l);
+	if (p->name[l-1] != '\n')
+	    console_prompt_text(outfp, "\n", 1);
     }
     /* ...but we always print any `instruction'. */
     if (p->instruction) {
-	ptrlen plinst = ptrlen_from_asciz(p->instruction);
-	console_write(outfp, plinst);
-        if (!ptrlen_endswith(plinst, PTRLEN_LITERAL("\n"), NULL))
-	    console_write(outfp, PTRLEN_LITERAL("\n"));
+	size_t l = strlen(p->instruction);
+	console_prompt_text(outfp, p->instruction, l);
+	if (p->instruction[l-1] != '\n')
+	    console_prompt_text(outfp, "\n", 1);
     }
 
     for (curr_prompt = 0; curr_prompt < p->n_prompts; curr_prompt++) {
@@ -576,7 +510,7 @@ int console_get_userpass_input(prompts_t *p)
 	    newmode.c_lflag |= ECHO;
 	tcsetattr(infd, TCSANOW, &newmode);
 
-	console_write(outfp, ptrlen_from_asciz(pr->prompt));
+	console_prompt_text(outfp, pr->prompt, strlen(pr->prompt));
 
         len = 0;
         while (1) {
@@ -598,7 +532,7 @@ int console_get_userpass_input(prompts_t *p)
 	tcsetattr(infd, TCSANOW, &oldmode);
 
 	if (!pr->echo)
-            console_write(outfp, PTRLEN_LITERAL("\n"));
+	    console_prompt_text(outfp, "\n", 1);
 
         if (len < 0) {
             console_close(outfp, infd);
@@ -613,7 +547,15 @@ int console_get_userpass_input(prompts_t *p)
     return 1; /* success */
 }
 
-bool is_interactive(void)
+void frontend_keypress(void *handle)
+{
+    /*
+     * This is nothing but a stub, in console code.
+     */
+    return;
+}
+
+int is_interactive(void)
 {
     return isatty(0);
 }
@@ -625,10 +567,3 @@ bool is_interactive(void)
 char *platform_get_x_display(void) {
     return dupstr(getenv("DISPLAY"));
 }
-
-static const LogPolicyVtable default_logpolicy_vt = {
-    console_eventlog,
-    console_askappend,
-    console_logging_error,
-};
-LogPolicy default_logpolicy[1] = {{ &default_logpolicy_vt }};

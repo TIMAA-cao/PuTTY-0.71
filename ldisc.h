@@ -8,20 +8,19 @@
 #ifndef PUTTY_LDISC_H
 #define PUTTY_LDISC_H
 
-struct Ldisc_tag {
+typedef struct ldisc_tag {
     Terminal *term;
-    Backend *backend;
-    Seat *seat;
+    Backend *back;
+    void *backhandle;
+    void *frontend;
 
     /*
      * Values cached out of conf.
      */
-    bool telnet_keyboard, telnet_newline;
-    int protocol, localecho, localedit;
+    int telnet_keyboard, telnet_newline, protocol, localecho, localedit;
 
     char *buf;
-    size_t buflen, bufsiz;
-    bool quotenext;
-};
+    int buflen, bufsiz, quotenext;
+} *Ldisc;
 
 #endif /* PUTTY_LDISC_H */

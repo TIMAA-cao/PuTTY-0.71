@@ -19,29 +19,6 @@ DECL_WINDOWS_FUNCTION(static, BOOL, CryptReleaseContext,
                       (HCRYPTPROV, DWORD));
 static HMODULE wincrypt_module = NULL;
 
-bool win_read_random(void *buf, unsigned wanted)
-{
-    bool toret = false;
-    HCRYPTPROV crypt_provider;
-
-    if (!wincrypt_module) {
-        wincrypt_module = load_system32_dll("advapi32.dll");
-        GET_WINDOWS_FUNCTION(wincrypt_module, CryptAcquireContextA);
-        GET_WINDOWS_FUNCTION(wincrypt_module, CryptGenRandom);
-        GET_WINDOWS_FUNCTION(wincrypt_module, CryptReleaseContext);
-    }
-
-    if (wincrypt_module && p_CryptAcquireContextA &&
-        p_CryptGenRandom && p_CryptReleaseContext &&
-        p_CryptAcquireContextA(&crypt_provider, NULL, NULL, PROV_RSA_FULL,
-                               CRYPT_VERIFYCONTEXT)) {
-        toret = p_CryptGenRandom(crypt_provider, wanted, buf);
-        p_CryptReleaseContext(crypt_provider, 0);
-    }
-
-    return toret;
-}
-
 /*
  * This function is called once, at PuTTY startup.
  */
@@ -51,8 +28,8 @@ void noise_get_heavy(void (*func) (void *, int))
     HANDLE srch;
     WIN32_FIND_DATA finddata;
     DWORD pid;
+    HCRYPTPROV crypt_provider;
     char winpath[MAX_PATH + 3];
-    BYTE buf[32];
 
     GetWindowsDirectory(winpath, sizeof(winpath));
     strcat(winpath, "\\*");
@@ -67,12 +44,27 @@ void noise_get_heavy(void (*func) (void *, int))
     pid = GetCurrentProcessId();
     func(&pid, sizeof(pid));
 
-    if (win_read_random(buf, sizeof(buf))) {
-        func(buf, sizeof(buf));
-        smemclr(buf, sizeof(buf));
+    if (!wincrypt_module) {
+        wincrypt_module = load_system32_dll("advapi32.dll");
+        GET_WINDOWS_FUNCTION(wincrypt_module, CryptAcquireContextA);
+        GET_WINDOWS_FUNCTION(wincrypt_module, CryptGenRandom);
+        GET_WINDOWS_FUNCTION(wincrypt_module, CryptReleaseContext);
+    }
+
+    if (wincrypt_module && p_CryptAcquireContextA &&
+        p_CryptGenRandom && p_CryptReleaseContext &&
+        p_CryptAcquireContextA(&crypt_provider, NULL, NULL, PROV_RSA_FULL,
+                               CRYPT_VERIFYCONTEXT)) {
+        BYTE buf[32];
+        if (p_CryptGenRandom(crypt_provider, 32, buf)) {
+            func(buf, sizeof(buf));
+        }
+        p_CryptReleaseContext(crypt_provider, 0);
     }
 
     read_random_seed(func);
+    /* Update the seed immediately, in case another instance uses it. */
+    random_save_seed();
 }
 
 void random_save_seed(void)
@@ -85,6 +77,24 @@ void random_save_seed(void)
 	write_random_seed(data, len);
 	sfree(data);
     }
+}
+
+/*
+ * This function is called every time the random pool needs
+ * stirring, and will acquire the system time in all available
+ * forms.
+ */
+void noise_get_light(void (*func) (void *, int))
+{
+    SYSTEMTIME systime;
+    DWORD adjust[2];
+    BOOL rubbish;
+
+    GetSystemTime(&systime);
+    func(&systime, sizeof(systime));
+
+    GetSystemTimeAdjustment(&adjust[0], &adjust[1], &rubbish);
+    func(&adjust, sizeof(adjust));
 }
 
 /*
@@ -102,26 +112,26 @@ void noise_regular(void)
     FILETIME times[4];
 
     w = GetForegroundWindow();
-    random_add_noise(NOISE_SOURCE_FGWINDOW, &w, sizeof(w));
+    random_add_noise(&w, sizeof(w));
     w = GetCapture();
-    random_add_noise(NOISE_SOURCE_CAPTURE, &w, sizeof(w));
+    random_add_noise(&w, sizeof(w));
     w = GetClipboardOwner();
-    random_add_noise(NOISE_SOURCE_CLIPBOARD, &w, sizeof(w));
+    random_add_noise(&w, sizeof(w));
     z = GetQueueStatus(QS_ALLEVENTS);
-    random_add_noise(NOISE_SOURCE_QUEUE, &z, sizeof(z));
+    random_add_noise(&z, sizeof(z));
 
     GetCursorPos(&pt);
-    random_add_noise(NOISE_SOURCE_CURSORPOS, &pt, sizeof(pt));
+    random_add_noise(&pt, sizeof(pt));
 
     GlobalMemoryStatus(&memstat);
-    random_add_noise(NOISE_SOURCE_MEMINFO, &memstat, sizeof(memstat));
+    random_add_noise(&memstat, sizeof(memstat));
 
     GetThreadTimes(GetCurrentThread(), times, times + 1, times + 2,
 		   times + 3);
-    random_add_noise(NOISE_SOURCE_THREADTIME, &times, sizeof(times));
+    random_add_noise(&times, sizeof(times));
     GetProcessTimes(GetCurrentProcess(), times, times + 1, times + 2,
 		    times + 3);
-    random_add_noise(NOISE_SOURCE_PROCTIME, &times, sizeof(times));
+    random_add_noise(&times, sizeof(times));
 }
 
 /*
@@ -130,25 +140,16 @@ void noise_regular(void)
  * counter to the noise pool. It gets the scan code or mouse
  * position passed in.
  */
-void noise_ultralight(NoiseSourceId id, unsigned long data)
+void noise_ultralight(unsigned long data)
 {
     DWORD wintime;
     LARGE_INTEGER perftime;
 
-    random_add_noise(id, &data, sizeof(DWORD));
+    random_add_noise(&data, sizeof(DWORD));
 
     wintime = GetTickCount();
-    random_add_noise(NOISE_SOURCE_TIME, &wintime, sizeof(DWORD));
+    random_add_noise(&wintime, sizeof(DWORD));
 
     if (QueryPerformanceCounter(&perftime))
-	random_add_noise(NOISE_SOURCE_PERFCOUNT, &perftime, sizeof(perftime));
-}
-
-uint64_t prng_reseed_time_ms(void)
-{
-    FILETIME ft;
-    GetSystemTimeAsFileTime(&ft);
-    uint64_t value = ft.dwHighDateTime;
-    value = (value << 32) + ft.dwLowDateTime;
-    return value / 10000;              /* 1 millisecond / 100ns */
+	random_add_noise(&perftime, sizeof(perftime));
 }

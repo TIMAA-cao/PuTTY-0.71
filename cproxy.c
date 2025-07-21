@@ -9,25 +9,40 @@
 #include <ctype.h>
 #include <string.h>
 
+#define DEFINE_PLUG_METHOD_MACROS
 #include "putty.h"
 #include "ssh.h" /* For MD5 support */
 #include "network.h"
 #include "proxy.h"
-#include "marshal.h"
 
 static void hmacmd5_chap(const unsigned char *challenge, int challen,
 			 const char *passwd, unsigned char *response)
 {
-    mac_simple(&ssh_hmac_md5, ptrlen_from_asciz(passwd),
-               make_ptrlen(challenge, challen), response);
+    void *hmacmd5_ctx;
+    int pwlen;
+
+    hmacmd5_ctx = hmacmd5_make_context(NULL);
+
+    pwlen = strlen(passwd);
+    if (pwlen>64) {
+	unsigned char md5buf[16];
+	MD5Simple(passwd, pwlen, md5buf);
+	hmacmd5_key(hmacmd5_ctx, md5buf, 16);
+    } else {
+	hmacmd5_key(hmacmd5_ctx, passwd, pwlen);
+    }
+
+    hmacmd5_do_hmac(hmacmd5_ctx, challenge, challen, response);
+    hmacmd5_free_context(hmacmd5_ctx);
 }
 
-void proxy_socks5_offerencryptedauth(BinarySink *bs)
+void proxy_socks5_offerencryptedauth(char *command, int *len)
 {
-    put_byte(bs, 0x03);              /* CHAP */
+    command[*len] = 0x03; /* CHAP */
+    (*len)++;
 }
 
-int proxy_socks5_handlechap (ProxySocket *p)
+int proxy_socks5_handlechap (Proxy_Socket p)
 {
 
     /* CHAP authentication reply format:
@@ -117,7 +132,7 @@ int proxy_socks5_handlechap (ProxySocket *p)
 		hmacmd5_chap(data, p->chap_current_datalen,
 			     conf_get_str(p->conf, CONF_proxy_password),
 			     &outbuf[4]);
-		sk_write(p->sub_socket, outbuf, 20);
+		sk_write(p->sub_socket, (char *)outbuf, 20);
 	      break;
 	      case 0x11:
 	        /* Chose a protocol */
@@ -143,7 +158,7 @@ int proxy_socks5_handlechap (ProxySocket *p)
     return 0;
 }
 
-int proxy_socks5_selectchap(ProxySocket *p)
+int proxy_socks5_selectchap(Proxy_Socket p)
 {
     char *username = conf_get_str(p->conf, CONF_proxy_username);
     char *password = conf_get_str(p->conf, CONF_proxy_password);

@@ -164,7 +164,7 @@ unsigned long timing_last_clock(void)
  * Returns the time (in ticks) expected until the next timer after
  * that triggers.
  */
-bool run_timers(unsigned long anow, unsigned long *next)
+int run_timers(unsigned long anow, unsigned long *next)
 {
     struct timer *first;
 
@@ -176,7 +176,7 @@ bool run_timers(unsigned long anow, unsigned long *next)
 	first = (struct timer *)index234(timers, 0);
 
 	if (!first)
-	    return false;	       /* no timers remaining */
+	    return FALSE;	       /* no timers remaining */
 
 	if (find234(timer_contexts, first->ctx, NULL) == NULL) {
 	    /*
@@ -200,7 +200,7 @@ bool run_timers(unsigned long anow, unsigned long *next)
 	     * future. Return how long it has yet to go.
 	     */
 	    *next = first->now;
-	    return true;
+	    return TRUE;
 	}
     }
 }

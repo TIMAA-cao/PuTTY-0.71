@@ -15,23 +15,23 @@
 
 #define AGENT_COPYDATA_ID 0x804e50ba   /* random goop */
 
-bool agent_exists(void)
+int agent_exists(void)
 {
     HWND hwnd;
     hwnd = FindWindow("Pageant", "Pageant");
     if (!hwnd)
-	return false;
+	return FALSE;
     else
-	return true;
+	return TRUE;
 }
 
 void agent_cancel_query(agent_pending_query *q)
 {
-    unreachable("Windows agent queries are never asynchronous!");
+    assert(0 && "Windows agent queries are never asynchronous!");
 }
 
 agent_pending_query *agent_query(
-    strbuf *query, void **out, int *outlen,
+    void *in, int inlen, void **out, int *outlen,
     void (*callback)(void *, void *, int), void *callback_ctx)
 {
     HWND hwnd;
@@ -46,9 +46,6 @@ agent_pending_query *agent_query(
 
     *out = NULL;
     *outlen = 0;
-
-    if (query->len > AGENT_MAX_MSGLEN)
-        return NULL;                   /* query too large */
 
     hwnd = FindWindow("Pageant", "Pageant");
     if (!hwnd)
@@ -75,9 +72,9 @@ agent_pending_query *agent_query(
             if (psd) {
                 if (p_InitializeSecurityDescriptor
                     (psd, SECURITY_DESCRIPTOR_REVISION) &&
-                    p_SetSecurityDescriptorOwner(psd, usersid, false)) {
+                    p_SetSecurityDescriptorOwner(psd, usersid, FALSE)) {
                     sa.nLength = sizeof(sa);
-                    sa.bInheritHandle = true;
+                    sa.bInheritHandle = TRUE;
                     sa.lpSecurityDescriptor = psd;
                     psa = &sa;
                 } else {
@@ -96,8 +93,7 @@ agent_pending_query *agent_query(
 	return NULL;		       /* *out == NULL, so failure */
     }
     p = MapViewOfFile(filemap, FILE_MAP_WRITE, 0, 0, 0);
-    strbuf_finalise_agent_query(query);
-    memcpy(p, query->s, query->len);
+    memcpy(p, in, inlen);
     cds.dwData = AGENT_COPYDATA_ID;
     cds.cbData = 1 + strlen(mapname);
     cds.lpData = mapname;
@@ -109,7 +105,7 @@ agent_pending_query *agent_query(
      */
     id = SendMessage(hwnd, WM_COPYDATA, (WPARAM) NULL, (LPARAM) &cds);
     if (id > 0) {
-	retlen = 4 + GET_32BIT_MSB_FIRST(p);
+	retlen = 4 + GET_32BIT(p);
 	ret = snewn(retlen, unsigned char);
 	if (ret) {
 	    memcpy(ret, p, retlen);

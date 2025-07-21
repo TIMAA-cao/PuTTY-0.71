@@ -383,6 +383,7 @@ static IShellLink *make_shell_link(const char *appname,
 {
     IShellLink *ret;
     char *app_path, *param_string, *desc_string;
+    void *psettings_tmp;
     IPropertyStore *pPS;
     PROPVARIANT pv;
 
@@ -408,7 +409,7 @@ static IShellLink *make_shell_link(const char *appname,
 
     /* Check if this is a valid session, otherwise don't add. */
     if (sessionname) {
-        settings_r *psettings_tmp = open_settings_r(sessionname);
+        psettings_tmp = open_settings_r(sessionname);
         if (!psettings_tmp) {
             sfree(app_path);
             return NULL;
@@ -492,7 +493,7 @@ static void update_jumplist_from_registry(void)
     IObjectArray *array = NULL;
     IShellLink *link = NULL;
     IObjectArray *pRemoved = NULL;
-    bool need_abort = false;
+    int need_abort = FALSE;
 
     /*
      * Create an ICustomDestinationList: the top-level object which
@@ -513,7 +514,7 @@ static void update_jumplist_from_registry(void)
     if (!SUCCEEDED(pCDL->lpVtbl->BeginList(pCDL, &num_items,
                                            COMPTR(IObjectArray, &pRemoved))))
         goto cleanup;
-    need_abort = true;
+    need_abort = TRUE;
     if (!SUCCEEDED(pRemoved->lpVtbl->GetCount(pRemoved, &nremoved)))
         nremoved = 0;
 
@@ -538,12 +539,12 @@ static void update_jumplist_from_registry(void)
         link = make_shell_link(NULL, piterator);
         if (link) {
             UINT i;
-            bool found;
+            int found;
 
             /*
              * Check that the link isn't in the user-removed list.
              */
-            for (i = 0, found = false; i < nremoved && !found; i++) {
+            for (i = 0, found = FALSE; i < nremoved && !found; i++) {
                 IShellLink *rlink;
                 if (SUCCEEDED(pRemoved->lpVtbl->GetAt
                               (pRemoved, i, COMPTR(IShellLink, &rlink)))) {
@@ -553,7 +554,7 @@ static void update_jumplist_from_registry(void)
                         SUCCEEDED(rlink->lpVtbl->GetDescription
                                   (rlink, desc2, sizeof(desc2)-1)) &&
                         !strcmp(desc1, desc2)) {
-                        found = true;
+                        found = TRUE;
                     }
                     rlink->lpVtbl->Release(rlink);
                 }
@@ -656,7 +657,7 @@ static void update_jumplist_from_registry(void)
      * Commit the jump list.
      */
     pCDL->lpVtbl->CommitList(pCDL);
-    need_abort = false;
+    need_abort = FALSE;
 
     /*
      * Clean up.
@@ -687,7 +688,8 @@ void clear_jumplist(void)
 /* Adds a saved session to the Windows 7 jumplist. */
 void add_session_to_jumplist(const char * const sessionname)
 {
-    if ((osMajorVersion < 6) || (osMajorVersion == 6 && osMinorVersion < 1))
+    if ((osVersion.dwMajorVersion < 6) ||
+        (osVersion.dwMajorVersion == 6 && osVersion.dwMinorVersion < 1))
         return;                        /* do nothing on pre-Win7 systems */
 
     if (add_to_jumplist_registry(sessionname) == JUMPLISTREG_OK) {
@@ -701,7 +703,8 @@ void add_session_to_jumplist(const char * const sessionname)
 /* Removes a saved session from the Windows jumplist. */
 void remove_session_from_jumplist(const char * const sessionname)
 {
-    if ((osMajorVersion < 6) || (osMajorVersion == 6 && osMinorVersion < 1))
+    if ((osVersion.dwMajorVersion < 6) ||
+        (osVersion.dwMajorVersion == 6 && osVersion.dwMinorVersion < 1))
         return;                        /* do nothing on pre-Win7 systems */
 
     if (remove_from_jumplist_registry(sessionname) == JUMPLISTREG_OK) {
@@ -715,7 +718,7 @@ void remove_session_from_jumplist(const char * const sessionname)
 /* Set Explicit App User Model Id to fix removable media error with
    jump lists */
 
-bool set_explicit_app_user_model_id(void)
+BOOL set_explicit_app_user_model_id()
 {
   DECL_WINDOWS_FUNCTION(static, HRESULT, SetCurrentProcessExplicitAppUserModelID,
                         (PCWSTR));
@@ -738,12 +741,12 @@ bool set_explicit_app_user_model_id(void)
     {
         if (p_SetCurrentProcessExplicitAppUserModelID(L"SimonTatham.PuTTY") == S_OK)
         {
-	  return true;
+	  return TRUE;
         }
-        return false;
+        return FALSE;
     }
     /* Function doesn't exist, which is ok for Pre-7 systems */
 
-    return true;
+    return TRUE;
 
 }

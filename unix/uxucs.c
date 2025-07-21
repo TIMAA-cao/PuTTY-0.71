@@ -16,9 +16,9 @@
  * Unix Unicode-handling routines.
  */
 
-bool is_dbcs_leadbyte(int codepage, char byte)
+int is_dbcs_leadbyte(int codepage, char byte)
 {
-    return false;                      /* we don't do DBCS */
+    return 0;			       /* we don't do DBCS */
 }
 
 int mb_to_wc(int codepage, int flags, const char *mbstr, int mblen,
@@ -57,9 +57,13 @@ int mb_to_wc(int codepage, int flags, const char *mbstr, int mblen,
 }
 
 int wc_to_mb(int codepage, int flags, const wchar_t *wcstr, int wclen,
-	     char *mbstr, int mblen, const char *defchr,
+	     char *mbstr, int mblen, const char *defchr, int *defused,
 	     struct unicode_data *ucsdata)
 {
+    /* FIXME: we should remove the defused param completely... */
+    if (defused)
+	*defused = 0;
+
     if (codepage == DEFAULT_CODEPAGE) {
 	char output[MB_LEN_MAX];
 	mbstate_t state;
@@ -96,13 +100,12 @@ int wc_to_mb(int codepage, int flags, const wchar_t *wcstr, int wclen,
 }
 
 /*
- * Return value is true if pterm is to run in direct-to-font mode.
+ * Return value is TRUE if pterm is to run in direct-to-font mode.
  */
-bool init_ucs(struct unicode_data *ucsdata, char *linecharset,
-              bool utf8_override, int font_charset, int vtmode)
+int init_ucs(struct unicode_data *ucsdata, char *linecharset,
+	     int utf8_override, int font_charset, int vtmode)
 {
-    int i;
-    bool ret = false;
+    int i, ret = 0;
 
     /*
      * In the platform-independent parts of the code, font_codepage
@@ -146,7 +149,7 @@ bool init_ucs(struct unicode_data *ucsdata, char *linecharset,
 	ucsdata->line_codepage = font_charset;
 
     if (ucsdata->line_codepage == CS_NONE)
-	ret = true;
+	ret = 1;
 
     /*
      * Set up unitab_line, by translating each individual character

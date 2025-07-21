@@ -13,10 +13,14 @@
 #include <errno.h>
 #include <assert.h>
 #include <glob.h>
+#ifndef HAVE_NO_SYS_SELECT_H
+#include <sys/select.h>
+#endif
 
 #include "putty.h"
 #include "ssh.h"
 #include "psftp.h"
+#include "int64.h"
 
 /*
  * In PSFTP our selects are synchronous, so these functions are
@@ -34,7 +38,7 @@ void platform_get_x11_auth(struct X11Display *display, Conf *conf)
 {
     /* Do nothing, therefore no auth. */
 }
-const bool platform_uses_x11_unix_by_default = true;
+const int platform_uses_x11_unix_by_default = TRUE;
 
 /*
  * Default settings that are specific to PSFTP.
@@ -42,11 +46,6 @@ const bool platform_uses_x11_unix_by_default = true;
 char *platform_default_s(const char *name)
 {
     return NULL;
-}
-
-bool platform_default_b(const char *name, bool def)
-{
-    return def;
 }
 
 int platform_default_i(const char *name, int def)
@@ -67,12 +66,14 @@ Filename *platform_default_filename(const char *name)
 	return filename_from_str("");
 }
 
-int filexfer_get_userpass_input(Seat *seat, prompts_t *p, bufchain *input)
+char *get_ttymode(void *frontend, const char *mode) { return NULL; }
+
+int get_userpass_input(prompts_t *p, const unsigned char *in, int inlen)
 {
     int ret;
-    ret = cmdline_get_passwd_input(p);
+    ret = cmdline_get_passwd_input(p, in, inlen);
     if (ret == -1)
-	ret = console_get_userpass_input(p);
+	ret = console_get_userpass_input(p, in, inlen);
     return ret;
 }
 
@@ -95,7 +96,7 @@ char *psftp_lcd(char *dir)
 char *psftp_getcwd(void)
 {
     char *buffer, *ret;
-    size_t size = 256;
+    int size = 256;
 
     buffer = snewn(size, char);
     while (1) {
@@ -110,7 +111,8 @@ char *psftp_getcwd(void)
 	 * Otherwise, ERANGE was returned, meaning the buffer
 	 * wasn't big enough.
 	 */
-        sgrowarray(buffer, size, size);
+	size = size * 3 / 2;
+	buffer = sresize(buffer, size, char);
     }
 }
 
@@ -118,7 +120,7 @@ struct RFile {
     int fd;
 };
 
-RFile *open_existing_file(const char *name, uint64_t *size,
+RFile *open_existing_file(const char *name, uint64 *size,
 			  unsigned long *mtime, unsigned long *atime,
                           long *perms)
 {
@@ -140,7 +142,8 @@ RFile *open_existing_file(const char *name, uint64_t *size,
 	}
 
 	if (size)
-	    *size = statbuf.st_size;
+	    *size = uint64_make((statbuf.st_size >> 16) >> 16,
+				statbuf.st_size);
 	 	
 	if (mtime)
 	    *mtime = statbuf.st_mtime;
@@ -189,7 +192,7 @@ WFile *open_new_file(const char *name, long perms)
 }
 
 
-WFile *open_existing_wfile(const char *name, uint64_t *size)
+WFile *open_existing_wfile(const char *name, uint64 *size)
 {
     int fd;
     WFile *ret;
@@ -209,7 +212,8 @@ WFile *open_existing_wfile(const char *name, uint64_t *size)
 	    memset(&statbuf, 0, sizeof(statbuf));
 	}
 
-	*size = statbuf.st_size;
+	*size = uint64_make((statbuf.st_size >> 16) >> 16,
+			    statbuf.st_size);
     }
 
     return ret;
@@ -258,10 +262,13 @@ void close_wfile(WFile *f)
 
 /* Seek offset bytes through file, from whence, where whence is
    FROM_START, FROM_CURRENT, or FROM_END */
-int seek_file(WFile *f, uint64_t offset, int whence)
+int seek_file(WFile *f, uint64 offset, int whence)
 {
+    off_t fileofft;
     int lseek_whence;
     
+    fileofft = (((off_t) offset.hi << 16) << 16) + offset.lo;
+
     switch (whence) {
     case FROM_START:
 	lseek_whence = SEEK_SET;
@@ -276,12 +283,19 @@ int seek_file(WFile *f, uint64_t offset, int whence)
 	return -1;
     }
 
-    return lseek(f->fd, offset, lseek_whence) >= 0 ? 0 : -1;
+    return lseek(f->fd, fileofft, lseek_whence) >= 0 ? 0 : -1;
 }
 
-uint64_t get_file_posn(WFile *f)
+uint64 get_file_posn(WFile *f)
 {
-    return lseek(f->fd, (off_t) 0, SEEK_CUR);
+    off_t fileofft;
+    uint64 ret;
+
+    fileofft = lseek(f->fd, (off_t) 0, SEEK_CUR);
+
+    ret = uint64_make((fileofft >> 16) >> 16, fileofft);
+
+    return ret;
 }
 
 int file_type(const char *name)
@@ -307,16 +321,14 @@ struct DirHandle {
     DIR *dir;
 };
 
-DirHandle *open_directory(const char *name, const char **errmsg)
+DirHandle *open_directory(const char *name)
 {
     DIR *dir;
     DirHandle *ret;
 
     dir = opendir(name);
-    if (!dir) {
-        *errmsg = strerror(errno);
+    if (!dir)
 	return NULL;
-    }
 
     ret = snew(DirHandle);
     ret->dir = dir;
@@ -344,7 +356,7 @@ void close_directory(DirHandle *dir)
     sfree(dir);
 }
 
-int test_wildcard(const char *name, bool cmdline)
+int test_wildcard(const char *name, int cmdline)
 {
     struct stat statbuf;
 
@@ -401,7 +413,7 @@ void finish_wildcard_matching(WildcardMatcher *dir) {
     sfree(dir);
 }
 
-char *stripslashes(const char *str, bool local)
+char *stripslashes(const char *str, int local)
 {
     char *p;
 
@@ -415,47 +427,41 @@ char *stripslashes(const char *str, bool local)
     return (char *)str;
 }
 
-bool vet_filename(const char *name)
+int vet_filename(const char *name)
 {
     if (strchr(name, '/'))
-	return false;
+	return FALSE;
 
     if (name[0] == '.' && (!name[1] || (name[1] == '.' && !name[2])))
-	return false;
+	return FALSE;
 
-    return true;
+    return TRUE;
 }
 
-bool create_directory(const char *name)
+int create_directory(const char *name)
 {
     return mkdir(name, 0777) == 0;
 }
 
 char *dir_file_cat(const char *dir, const char *file)
 {
-    ptrlen dir_pl = ptrlen_from_asciz(dir);
-    return dupcat(
-        dir, ptrlen_endswith(dir_pl, PTRLEN_LITERAL("/"), NULL) ? "" : "/",
-        file, NULL);
+    return dupcat(dir, "/", file, NULL);
 }
 
 /*
  * Do a select() between all currently active network fds and
  * optionally stdin.
  */
-static int ssh_sftp_do_select(bool include_stdin, bool no_fds_ok)
+static int ssh_sftp_do_select(int include_stdin, int no_fds_ok)
 {
-    int i, *fdlist;
-    size_t fdsize;
-    int fd, fdcount, fdstate, rwx, ret;
+    fd_set rset, wset, xset;
+    int i, fdcount, fdsize, *fdlist;
+    int fd, fdstate, rwx, ret, maxfd;
     unsigned long now = GETTICKCOUNT();
     unsigned long next;
-    bool done_something = false;
 
     fdlist = NULL;
-    fdsize = 0;
-
-    pollwrapper *pw = pollwrap_new();
+    fdcount = fdsize = 0;
 
     do {
 
@@ -464,13 +470,19 @@ static int ssh_sftp_do_select(bool include_stdin, bool no_fds_ok)
 	for (fd = first_fd(&fdstate, &rwx); fd >= 0;
 	     fd = next_fd(&fdstate, &rwx)) i++;
 
-	if (i < 1 && !no_fds_ok && !toplevel_callback_pending())
+	if (i < 1 && !no_fds_ok)
 	    return -1;		       /* doom */
 
 	/* Expand the fdlist buffer if necessary. */
-        sgrowarray(fdlist, fdsize, i);
+	if (i > fdsize) {
+	    fdsize = i + 16;
+	    fdlist = sresize(fdlist, fdsize, int);
+	}
 
-        pollwrap_clear(pw);
+	FD_ZERO(&rset);
+	FD_ZERO(&wset);
+	FD_ZERO(&xset);
+	maxfd = 0;
 
 	/*
 	 * Add all currently open fds to the select sets, and store
@@ -480,20 +492,29 @@ static int ssh_sftp_do_select(bool include_stdin, bool no_fds_ok)
 	for (fd = first_fd(&fdstate, &rwx); fd >= 0;
 	     fd = next_fd(&fdstate, &rwx)) {
 	    fdlist[fdcount++] = fd;
-            pollwrap_add_fd_rwx(pw, fd, rwx);
+	    if (rwx & 1)
+		FD_SET_MAX(fd, maxfd, rset);
+	    if (rwx & 2)
+		FD_SET_MAX(fd, maxfd, wset);
+	    if (rwx & 4)
+		FD_SET_MAX(fd, maxfd, xset);
 	}
 
 	if (include_stdin)
-	    pollwrap_add_fd_rwx(pw, 0, SELECT_R);
+	    FD_SET_MAX(0, maxfd, rset);
 
         if (toplevel_callback_pending()) {
-            ret = pollwrap_poll_instant(pw);
+            struct timeval tv;
+            tv.tv_sec = 0;
+            tv.tv_usec = 0;
+            ret = select(maxfd, &rset, &wset, &xset, &tv);
             if (ret == 0)
-                done_something |= run_toplevel_callbacks();
+                run_toplevel_callbacks();
         } else if (run_timers(now, &next)) {
             do {
                 unsigned long then;
                 long ticks;
+                struct timeval tv;
 
 		then = now;
 		now = GETTICKCOUNT();
@@ -501,54 +522,46 @@ static int ssh_sftp_do_select(bool include_stdin, bool no_fds_ok)
 		    ticks = 0;
 		else
 		    ticks = next - now;
-
-                bool overflow = false;
-                if (ticks > INT_MAX) {
-                    ticks = INT_MAX;
-                    overflow = true;
-                }
-
-                ret = pollwrap_poll_timeout(pw, ticks);
-                if (ret == 0 && !overflow)
+		tv.tv_sec = ticks / 1000;
+		tv.tv_usec = ticks % 1000 * 1000;
+                ret = select(maxfd, &rset, &wset, &xset, &tv);
+                if (ret == 0)
                     now = next;
                 else
                     now = GETTICKCOUNT();
             } while (ret < 0 && errno == EINTR);
         } else {
             do {
-                ret = pollwrap_poll_endless(pw);
+                ret = select(maxfd, &rset, &wset, &xset, NULL);
             } while (ret < 0 && errno == EINTR);
         }
-    } while (ret == 0 && !done_something);
+    } while (ret == 0);
 
     if (ret < 0) {
-	perror("poll");
+	perror("select");
 	exit(1);
     }
 
     for (i = 0; i < fdcount; i++) {
 	fd = fdlist[i];
-        int rwx = pollwrap_get_fd_rwx(pw, fd);
 	/*
 	 * We must process exceptional notifications before
 	 * ordinary readability ones, or we may go straight
 	 * past the urgent marker.
 	 */
-	if (rwx & SELECT_X)
-	    select_result(fd, SELECT_X);
-	if (rwx & SELECT_R)
-	    select_result(fd, SELECT_R);
-	if (rwx & SELECT_W)
-	    select_result(fd, SELECT_W);
+	if (FD_ISSET(fd, &xset))
+	    select_result(fd, 4);
+	if (FD_ISSET(fd, &rset))
+	    select_result(fd, 1);
+	if (FD_ISSET(fd, &wset))
+	    select_result(fd, 2);
     }
 
     sfree(fdlist);
 
     run_toplevel_callbacks();
 
-    int toret = pollwrap_check_fd_rwx(pw, 0, SELECT_R) ? 1 : 0;
-    pollwrap_free(pw);
-    return toret;
+    return FD_ISSET(0, &rset) ? 1 : 0;
 }
 
 /*
@@ -556,17 +569,16 @@ static int ssh_sftp_do_select(bool include_stdin, bool no_fds_ok)
  */
 int ssh_sftp_loop_iteration(void)
 {
-    return ssh_sftp_do_select(false, false);
+    return ssh_sftp_do_select(FALSE, FALSE);
 }
 
 /*
  * Read a PSFTP command line from stdin.
  */
-char *ssh_sftp_get_cmdline(const char *prompt, bool no_fds_ok)
+char *ssh_sftp_get_cmdline(const char *prompt, int no_fds_ok)
 {
     char *buf;
-    size_t buflen, bufsize;
-    int ret;
+    int buflen, bufsize, ret;
 
     fputs(prompt, stdout);
     fflush(stdout);
@@ -575,14 +587,17 @@ char *ssh_sftp_get_cmdline(const char *prompt, bool no_fds_ok)
     buflen = bufsize = 0;
 
     while (1) {
-	ret = ssh_sftp_do_select(true, no_fds_ok);
+	ret = ssh_sftp_do_select(TRUE, no_fds_ok);
 	if (ret < 0) {
 	    printf("connection died\n");
             sfree(buf);
 	    return NULL;	       /* woop woop */
 	}
 	if (ret > 0) {
-            sgrowarray(buf, bufsize, buflen);
+	    if (buflen >= bufsize) {
+		bufsize = buflen + 512;
+		buf = sresize(buf, bufsize, char);
+	    }
 	    ret = read(0, buf+buflen, 1);
 	    if (ret < 0) {
 		perror("read");
@@ -607,7 +622,7 @@ void frontend_net_error_pending(void) {}
 
 void platform_psftp_pre_conn_setup(void) {}
 
-const bool buildinfo_gtk_relevant = false;
+const int buildinfo_gtk_relevant = FALSE;
 
 /*
  * Main program: do platform-specific initialisation and then call

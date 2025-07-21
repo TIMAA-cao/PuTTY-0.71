@@ -16,7 +16,7 @@
 
 #include "putty.h"
 
-bool so_peercred(int fd, int *pid, int *uid, int *gid)
+int so_peercred(int fd, int *pid, int *uid, int *gid)
 {
 #ifdef HAVE_SO_PEERCRED
     struct ucred cr;
@@ -25,8 +25,8 @@ bool so_peercred(int fd, int *pid, int *uid, int *gid)
         *pid = cr.pid;
         *uid = cr.uid;
         *gid = cr.gid;
-        return true;
+        return TRUE;
     }
 #endif
-    return false;
+    return FALSE;
 }

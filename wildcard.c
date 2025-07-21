@@ -97,8 +97,7 @@ const char *wc_error(int value)
  * returns zero. If the wildcard fragment suffers a syntax error,
  * it returns <0 and the precise value indexes into wc_error.
  */
-static int wc_match_fragment(const char **fragment, const char **target,
-                             const char *target_end)
+static int wc_match_fragment(const char **fragment, const char **target)
 {
     const char *f, *t;
 
@@ -108,7 +107,7 @@ static int wc_match_fragment(const char **fragment, const char **target,
      * The fragment terminates at either the end of the string, or
      * the first (unescaped) *.
      */
-    while (*f && *f != '*' && t < target_end) {
+    while (*f && *f != '*' && *t) {
 	/*
 	 * Extract one character from t, and one character's worth
 	 * of pattern from f, and step along both. Return 0 if they
@@ -131,14 +130,14 @@ static int wc_match_fragment(const char **fragment, const char **target,
 	     */
 	    f++;
 	} else if (*f == '[') {
-	    bool invert = false;
-	    bool matched = false;
+	    int invert = 0;
+	    int matched = 0;
 	    /*
 	     * Open bracket introduces a character class.
 	     */
 	    f++;
 	    if (*f == '^') {
-		invert = true;
+		invert = 1;
 		f++;
 	    }
 	    while (*f != ']') {
@@ -162,7 +161,7 @@ static int wc_match_fragment(const char **fragment, const char **target,
 			int t = lower; lower = upper; upper = t;
 		    }
 		    if (ourchr >= lower && ourchr <= upper)
-			matched = true;
+			matched = 1;
 		} else {
 		    matched |= (*t == *f++);
 		}
@@ -205,10 +204,8 @@ static int wc_match_fragment(const char **fragment, const char **target,
  * successful match, 0 for an unsuccessful match, and <0 for a
  * syntax error in the wildcard.
  */
-static int wc_match_inner(
-    const char *wildcard, const char *target, size_t target_len)
+int wc_match(const char *wildcard, const char *target)
 {
-    const char *target_end = target + target_len;
     int ret;
 
     /*
@@ -219,7 +216,7 @@ static int wc_match_inner(
      * routine once and give up if it fails.
      */
     if (*wildcard != '*') {
-	ret = wc_match_fragment(&wildcard, &target, target_end);
+	ret = wc_match_fragment(&wildcard, &target);
 	if (ret <= 0)
 	    return ret;		       /* pass back failure or error alike */
     }
@@ -248,12 +245,12 @@ static int wc_match_inner(
 	while (*target) {
 	    const char *save_w = wildcard, *save_t = target;
 
-	    ret = wc_match_fragment(&wildcard, &target, target_end);
+	    ret = wc_match_fragment(&wildcard, &target);
 
 	    if (ret < 0)
 		return ret;	       /* syntax error */
 
-	    if (ret > 0 && !*wildcard && target != target_end) {
+	    if (ret > 0 && !*wildcard && *target) {
 		/*
 		 * Final special case - literally.
 		 * 
@@ -275,9 +272,9 @@ static int wc_match_inner(
 		 * (which is why we saved `wildcard'). Then we
 		 * return whatever that operation returns.
 		 */
-		target = target_end - (target - save_t);
+		target = save_t + strlen(save_t) - (target - save_t);
 		wildcard = save_w;
-		return wc_match_fragment(&wildcard, &target, target_end);
+		return wc_match_fragment(&wildcard, &target);
 	    }
 
 	    if (ret > 0)
@@ -295,17 +292,7 @@ static int wc_match_inner(
      * wildcard. Hence, we return 1 if and only if we are also
      * right at the end of the target.
      */
-    return target == target_end;
-}
-
-int wc_match(const char *wildcard, const char *target)
-{
-    return wc_match_inner(wildcard, target, strlen(target));
-}
-
-int wc_match_pl(const char *wildcard, ptrlen target)
-{
-    return wc_match_inner(wildcard, target.ptr, target.len);
+    return (*target ? 0 : 1);
 }
 
 /*
@@ -315,11 +302,11 @@ int wc_match_pl(const char *wildcard, ptrlen target)
  * the original wildcard. You can also pass NULL as the output
  * buffer if you're only interested in the return value.
  * 
- * Returns true on success, or false if a wildcard character was
+ * Returns 1 on success, or 0 if a wildcard character was
  * encountered. In the latter case the output string MAY not be
  * zero-terminated and you should not use it for anything!
  */
-bool wc_unescape(char *output, const char *wildcard)
+int wc_unescape(char *output, const char *wildcard)
 {
     while (*wildcard) {
 	if (*wildcard == '\\') {
@@ -332,7 +319,7 @@ bool wc_unescape(char *output, const char *wildcard)
 	    }
 	} else if (*wildcard == '*' || *wildcard == '?' ||
 		   *wildcard == '[' || *wildcard == ']') {
-	    return false;              /* it's a wildcard! */
+	    return 0;		       /* it's a wildcard! */
 	} else {
 	    if (output)
 		*output++ = *wildcard;
@@ -341,7 +328,7 @@ bool wc_unescape(char *output, const char *wildcard)
     }
     if (output)
         *output = '\0';
-    return true;                       /* it's clean */
+    return 1;			       /* it's clean */
 }
 
 #ifdef TESTMODE
@@ -452,7 +439,7 @@ int main(void)
 	f = fragment_tests[i].wildcard;
 	t = fragment_tests[i].target;
 	eret = fragment_tests[i].expected_result;
-	aret = wc_match_fragment(&f, &t, t + strlen(t));
+	aret = wc_match_fragment(&f, &t);
 	if (aret != eret) {
 	    printf("failed test: /%s/ against /%s/ returned %d not %d\n",
 		   fragment_tests[i].wildcard, fragment_tests[i].target,

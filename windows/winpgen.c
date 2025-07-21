@@ -68,7 +68,7 @@ void nonfatal(const char *fmt, ...)
 struct progress {
     int nphases;
     struct {
-	bool exponential;
+	int exponential;
 	unsigned startpoint, total;
 	unsigned param, current, n;    /* if exponential */
 	unsigned mult;		       /* if linear */
@@ -90,11 +90,11 @@ static void progress_update(void *param, int action, int phase, int iprogress)
 	p->nphases = 0;
 	break;
       case PROGFN_LIN_PHASE:
-	p->phases[phase-1].exponential = false;
+	p->phases[phase-1].exponential = 0;
 	p->phases[phase-1].mult = p->phases[phase].total / progress;
 	break;
       case PROGFN_EXP_PHASE:
-	p->phases[phase-1].exponential = true;
+	p->phases[phase-1].exponential = 1;
 	p->phases[phase-1].param = 0x10000 + progress;
 	p->phases[phase-1].current = p->phases[phase-1].total;
 	p->phases[phase-1].n = 0;
@@ -134,6 +134,8 @@ static void progress_update(void *param, int action, int phase, int iprogress)
     }
 }
 
+extern const char ver[];
+
 struct PassphraseProcStruct {
     char **passphrase;
     char *comment;
@@ -166,7 +168,7 @@ static INT_PTR CALLBACK PassphraseProc(HWND hwnd, UINT msg,
 		MoveWindow(hwnd,
 			   (rs.right + rs.left + rd.left - rd.right) / 2,
 			   (rs.bottom + rs.top + rd.top - rd.bottom) / 2,
-			   rd.right - rd.left, rd.bottom - rd.top, true);
+			   rd.right - rd.left, rd.bottom - rd.top, TRUE);
 	}
 
 	p = (struct PassphraseProcStruct *) lParam;
@@ -207,8 +209,8 @@ static INT_PTR CALLBACK PassphraseProc(HWND hwnd, UINT msg,
  * Prompt for a key file. Assumes the filename buffer is of size
  * FILENAME_MAX.
  */
-static bool prompt_keyfile(HWND hwnd, char *dlgtitle,
-                           char *filename, bool save, bool ppk)
+static int prompt_keyfile(HWND hwnd, char *dlgtitle,
+			  char *filename, int save, int ppk)
 {
     OPENFILENAME of;
     memset(&of, 0, sizeof(of));
@@ -228,7 +230,7 @@ static bool prompt_keyfile(HWND hwnd, char *dlgtitle,
     of.lpstrFileTitle = NULL;
     of.lpstrTitle = dlgtitle;
     of.Flags = 0;
-    return request_file(NULL, &of, false, save);
+    return request_file(NULL, &of, FALSE, save);
 }
 
 /*
@@ -251,7 +253,7 @@ static INT_PTR CALLBACK LicenceProc(HWND hwnd, UINT msg,
 		MoveWindow(hwnd,
 			   (rs.right + rs.left + rd.left - rd.right) / 2,
 			   (rs.bottom + rs.top + rd.top - rd.bottom) / 2,
-			   rd.right - rd.left, rd.bottom - rd.top, true);
+			   rd.right - rd.left, rd.bottom - rd.top, TRUE);
 	}
 
         SetDlgItemText(hwnd, 1000, LICENCE_TEXT("\r\n\r\n"));
@@ -291,7 +293,7 @@ static INT_PTR CALLBACK AboutProc(HWND hwnd, UINT msg,
 		MoveWindow(hwnd,
 			   (rs.right + rs.left + rd.left - rd.right) / 2,
 			   (rs.bottom + rs.top + rd.top - rd.bottom) / 2,
-			   rd.right - rd.left, rd.bottom - rd.top, true);
+			   rd.right - rd.left, rd.bottom - rd.top, TRUE);
 	}
 
         {
@@ -344,10 +346,9 @@ struct rsa_key_thread_params {
     int curve_bits;                    /* bits in elliptic curve (ECDSA) */
     keytype keytype;
     union {
-        RSAKey *key;
+        struct RSAKey *key;
         struct dss_key *dsskey;
-        struct ecdsa_key *eckey;
-        struct eddsa_key *edkey;
+        struct ec_key *eckey;
     };
 };
 static DWORD WINAPI generate_key_thread(void *param)
@@ -362,10 +363,9 @@ static DWORD WINAPI generate_key_thread(void *param)
     if (params->keytype == DSA)
 	dsa_generate(params->dsskey, params->key_bits, progress_update, &prog);
     else if (params->keytype == ECDSA)
-        ecdsa_generate(params->eckey, params->curve_bits,
-                       progress_update, &prog);
+        ec_generate(params->eckey, params->curve_bits, progress_update, &prog);
     else if (params->keytype == ED25519)
-        eddsa_generate(params->edkey, 256, progress_update, &prog);
+        ec_edgenerate(params->eckey, 256, progress_update, &prog);
     else
 	rsa_generate(params->key, params->key_bits, progress_update, &prog);
 
@@ -376,33 +376,32 @@ static DWORD WINAPI generate_key_thread(void *param)
 }
 
 struct MainDlgState {
-    bool collecting_entropy;
-    bool generation_thread_exists;
-    bool key_exists;
+    int collecting_entropy;
+    int generation_thread_exists;
+    int key_exists;
     int entropy_got, entropy_required, entropy_size;
     int key_bits, curve_bits;
-    bool ssh2;
+    int ssh2;
     keytype keytype;
     char **commentptr;		       /* points to key.comment or ssh2key.comment */
-    ssh2_userkey ssh2key;
+    struct ssh2_userkey ssh2key;
     unsigned *entropy;
     union {
-        RSAKey key;
+        struct RSAKey key;
         struct dss_key dsskey;
-        struct ecdsa_key eckey;
-        struct eddsa_key edkey;
+        struct ec_key eckey;
     };
     HMENU filemenu, keymenu, cvtmenu;
 };
 
-static void hidemany(HWND hwnd, const int *ids, bool hideit)
+static void hidemany(HWND hwnd, const int *ids, int hideit)
 {
     while (*ids) {
 	ShowWindow(GetDlgItem(hwnd, *ids++), (hideit ? SW_HIDE : SW_SHOW));
     }
 }
 
-static void setupbigedit1(HWND hwnd, int id, int idstatic, RSAKey *key)
+static void setupbigedit1(HWND hwnd, int id, int idstatic, struct RSAKey *key)
 {
     char *buffer = ssh1_pubkey_str(key);
     SetDlgItemText(hwnd, id, buffer);
@@ -412,7 +411,7 @@ static void setupbigedit1(HWND hwnd, int id, int idstatic, RSAKey *key)
 }
 
 static void setupbigedit2(HWND hwnd, int id, int idstatic,
-			  ssh2_userkey *key)
+			  struct ssh2_userkey *key)
 {
     char *buffer = ssh2_pubkey_openssh_str(key);
     SetDlgItemText(hwnd, id, buffer);
@@ -491,9 +490,9 @@ void ui_set_state(HWND hwnd, struct MainDlgState *state, int status)
 
     switch (status) {
       case 0:			       /* no key */
-	hidemany(hwnd, nokey_ids, false);
-	hidemany(hwnd, generating_ids, true);
-	hidemany(hwnd, gotkey_ids, true);
+	hidemany(hwnd, nokey_ids, FALSE);
+	hidemany(hwnd, generating_ids, TRUE);
+	hidemany(hwnd, gotkey_ids, TRUE);
 	EnableWindow(GetDlgItem(hwnd, IDC_GENERATE), 1);
 	EnableWindow(GetDlgItem(hwnd, IDC_LOAD), 1);
 	EnableWindow(GetDlgItem(hwnd, IDC_SAVE), 0);
@@ -524,9 +523,9 @@ void ui_set_state(HWND hwnd, struct MainDlgState *state, int status)
 		       MF_GRAYED|MF_BYCOMMAND);
 	break;
       case 1:			       /* generating key */
-	hidemany(hwnd, nokey_ids, true);
-	hidemany(hwnd, generating_ids, false);
-	hidemany(hwnd, gotkey_ids, true);
+	hidemany(hwnd, nokey_ids, TRUE);
+	hidemany(hwnd, generating_ids, FALSE);
+	hidemany(hwnd, gotkey_ids, TRUE);
 	EnableWindow(GetDlgItem(hwnd, IDC_GENERATE), 0);
 	EnableWindow(GetDlgItem(hwnd, IDC_LOAD), 0);
 	EnableWindow(GetDlgItem(hwnd, IDC_SAVE), 0);
@@ -557,9 +556,9 @@ void ui_set_state(HWND hwnd, struct MainDlgState *state, int status)
 		       MF_GRAYED|MF_BYCOMMAND);
 	break;
       case 2:
-	hidemany(hwnd, nokey_ids, true);
-	hidemany(hwnd, generating_ids, true);
-	hidemany(hwnd, gotkey_ids, false);
+	hidemany(hwnd, nokey_ids, TRUE);
+	hidemany(hwnd, generating_ids, TRUE);
+	hidemany(hwnd, gotkey_ids, FALSE);
 	EnableWindow(GetDlgItem(hwnd, IDC_GENERATE), 1);
 	EnableWindow(GetDlgItem(hwnd, IDC_LOAD), 1);
 	EnableWindow(GetDlgItem(hwnd, IDC_SAVE), 1);
@@ -640,16 +639,16 @@ void ui_set_key_type(HWND hwnd, struct MainDlgState *state, int button)
 }
 
 void load_key_file(HWND hwnd, struct MainDlgState *state,
-		   Filename *filename, bool was_import_cmd)
+		   Filename *filename, int was_import_cmd)
 {
     char *passphrase;
-    bool needs_pass;
+    int needs_pass;
     int type, realtype;
     int ret;
     const char *errmsg = NULL;
     char *comment;
-    RSAKey newkey1;
-    ssh2_userkey *newkey2 = NULL;
+    struct RSAKey newkey1;
+    struct ssh2_userkey *newkey2 = NULL;
 
     type = realtype = key_type(filename);
     if (type != SSH_KEYTYPE_SSH1 &&
@@ -672,7 +671,7 @@ void load_key_file(HWND hwnd, struct MainDlgState *state,
     comment = NULL;
     passphrase = NULL;
     if (realtype == SSH_KEYTYPE_SSH1)
-	needs_pass = rsa_ssh1_encrypted(filename, &comment);
+	needs_pass = rsakey_encrypted(filename, &comment);
     else if (realtype == SSH_KEYTYPE_SSH2)
 	needs_pass = ssh2_userkey_encrypted(filename, &comment);
     else
@@ -699,8 +698,7 @@ void load_key_file(HWND hwnd, struct MainDlgState *state,
 	    passphrase = dupstr("");
 	if (type == SSH_KEYTYPE_SSH1) {
 	    if (realtype == type)
-		ret = rsa_ssh1_loadkey(
-                    filename, &newkey1, passphrase, &errmsg);
+		ret = loadrsakey(filename, &newkey1, passphrase, &errmsg);
 	    else
 		ret = import_ssh1(filename, realtype, &newkey1,
                                   passphrase, &errmsg);
@@ -735,9 +733,10 @@ void load_key_file(HWND hwnd, struct MainDlgState *state,
 	    SetDlgItemText(hwnd, IDC_PASSPHRASE2EDIT,
 			   passphrase);
 	    if (type == SSH_KEYTYPE_SSH1) {
-		char *fingerprint, *savecomment;
+		char buf[128];
+		char *savecomment;
 
-		state->ssh2 = false;
+		state->ssh2 = FALSE;
 		state->commentptr = &state->key.comment;
 		state->key = newkey1;
 
@@ -746,11 +745,11 @@ void load_key_file(HWND hwnd, struct MainDlgState *state,
 		 */
 		savecomment = state->key.comment;
 		state->key.comment = NULL;
-		fingerprint = rsa_ssh1_fingerprint(&state->key);
+		rsa_fingerprint(buf, sizeof(buf),
+				&state->key);
 		state->key.comment = savecomment;
-		SetDlgItemText(hwnd, IDC_FINGERPRINT, fingerprint);
-                sfree(fingerprint);
 
+		SetDlgItemText(hwnd, IDC_FINGERPRINT, buf);
 		/*
 		 * Construct a decimal representation
 		 * of the key, for pasting into
@@ -762,7 +761,7 @@ void load_key_file(HWND hwnd, struct MainDlgState *state,
 		char *fp;
 		char *savecomment;
 
-		state->ssh2 = true;
+		state->ssh2 = TRUE;
 		state->commentptr =
 		    &state->ssh2key.comment;
 		state->ssh2key = *newkey2;	/* structure copy */
@@ -770,7 +769,7 @@ void load_key_file(HWND hwnd, struct MainDlgState *state,
 
 		savecomment = state->ssh2key.comment;
 		state->ssh2key.comment = NULL;
-		fp = ssh2_fingerprint(state->ssh2key.key);
+		fp = ssh2_fingerprint(state->ssh2key.alg, state->ssh2key.data);
 		state->ssh2key.comment = savecomment;
 
 		SetDlgItemText(hwnd, IDC_FINGERPRINT, fp);
@@ -787,7 +786,7 @@ void load_key_file(HWND hwnd, struct MainDlgState *state,
 	 * the key data.
 	 */
 	ui_set_state(hwnd, state, 2);
-	state->key_exists = true;
+	state->key_exists = TRUE;
 
 	/*
 	 * If the user has imported a foreign key
@@ -810,45 +809,14 @@ void load_key_file(HWND hwnd, struct MainDlgState *state,
     burnstr(passphrase);
 }
 
-static void start_generating_key(HWND hwnd, struct MainDlgState *state)
-{
-    static const char generating_msg[] =
-	"Please wait while a key is generated...";
-
-    struct rsa_key_thread_params *params;
-    DWORD threadid;
-
-    SetDlgItemText(hwnd, IDC_GENERATING, generating_msg);
-    SendDlgItemMessage(hwnd, IDC_PROGRESS, PBM_SETRANGE, 0,
-                       MAKELPARAM(0, PROGRESSRANGE));
-    SendDlgItemMessage(hwnd, IDC_PROGRESS, PBM_SETPOS, 0, 0);
-
-    params = snew(struct rsa_key_thread_params);
-    params->progressbar = GetDlgItem(hwnd, IDC_PROGRESS);
-    params->dialog = hwnd;
-    params->key_bits = state->key_bits;
-    params->curve_bits = state->curve_bits;
-    params->keytype = state->keytype;
-    params->key = &state->key;
-    params->dsskey = &state->dsskey;
-
-    if (!CreateThread(NULL, 0, generate_key_thread,
-                      params, 0, &threadid)) {
-        MessageBox(hwnd, "Out of thread resources",
-                   "Key generation error",
-                   MB_OK | MB_ICONERROR);
-        sfree(params);
-    } else {
-        state->generation_thread_exists = true;
-    }
-}
-
 /*
  * Dialog-box function for the main PuTTYgen dialog box.
  */
 static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
 				WPARAM wParam, LPARAM lParam)
 {
+    static const char generating_msg[] =
+	"Please wait while a key is generated...";
     static const char entropy_msg[] =
 	"Please generate some randomness by moving the mouse over the blank area.";
     struct MainDlgState *state;
@@ -869,10 +837,10 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
 		    (LPARAM) LoadIcon(hinst, MAKEINTRESOURCE(200)));
 
 	state = snew(struct MainDlgState);
-	state->generation_thread_exists = false;
-	state->collecting_entropy = false;
+	state->generation_thread_exists = FALSE;
+	state->collecting_entropy = FALSE;
 	state->entropy = NULL;
-	state->key_exists = false;
+	state->key_exists = FALSE;
 	SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR) state);
 	{
 	    HMENU menu, menu1;
@@ -933,7 +901,7 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
 		MoveWindow(hwnd,
 			   (rs.right + rs.left + rd.left - rd.right) / 2,
 			   (rs.bottom + rs.top + rd.top - rd.bottom) / 2,
-			   rd.right - rd.left, rd.bottom - rd.top, true);
+			   rd.right - rd.left, rd.bottom - rd.top, TRUE);
 	}
 
 	{
@@ -992,7 +960,7 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
             {
                 int i, bits;
                 const struct ec_curve *curve;
-                const ssh_keyalg *alg;
+                const struct ssh_signkey *alg;
 
                 for (i = 0; i < n_ec_nist_curve_lengths; i++) {
                     bits = ec_nist_curve_lengths[i];
@@ -1010,7 +978,7 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
 	    endbox(&cp);
 	}
         ui_set_key_type(hwnd, state, IDC_KEYSSH2RSA);
-	SetDlgItemInt(hwnd, IDC_BITS, DEFAULT_KEY_BITS, false);
+	SetDlgItemInt(hwnd, IDC_BITS, DEFAULT_KEY_BITS, FALSE);
 	SendDlgItemMessage(hwnd, IDC_CURVE, CB_SETCURSEL,
                            DEFAULT_CURVE_INDEX, 0);
 
@@ -1027,7 +995,7 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
 	 */
 	if (cmdline_keyfile) {
             Filename *fn = filename_from_str(cmdline_keyfile);
-	    load_key_file(hwnd, state, fn, false);
+	    load_key_file(hwnd, state, fn, 0);
             filename_free(fn);
         }
 
@@ -1041,16 +1009,40 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
 	    SendDlgItemMessage(hwnd, IDC_PROGRESS, PBM_SETPOS,
 			       state->entropy_got, 0);
 	    if (state->entropy_got >= state->entropy_required) {
+		struct rsa_key_thread_params *params;
+		DWORD threadid;
+
 		/*
 		 * Seed the entropy pool
 		 */
-                random_reseed(
-                    make_ptrlen(state->entropy, state->entropy_size));
+		random_add_heavynoise(state->entropy, state->entropy_size);
 		smemclr(state->entropy, state->entropy_size);
 		sfree(state->entropy);
-		state->collecting_entropy = false;
+		state->collecting_entropy = FALSE;
 
-                start_generating_key(hwnd, state);
+		SetDlgItemText(hwnd, IDC_GENERATING, generating_msg);
+		SendDlgItemMessage(hwnd, IDC_PROGRESS, PBM_SETRANGE, 0,
+				   MAKELPARAM(0, PROGRESSRANGE));
+		SendDlgItemMessage(hwnd, IDC_PROGRESS, PBM_SETPOS, 0, 0);
+
+		params = snew(struct rsa_key_thread_params);
+		params->progressbar = GetDlgItem(hwnd, IDC_PROGRESS);
+		params->dialog = hwnd;
+		params->key_bits = state->key_bits;
+		params->curve_bits = state->curve_bits;
+                params->keytype = state->keytype;
+		params->key = &state->key;
+		params->dsskey = &state->dsskey;
+
+		if (!CreateThread(NULL, 0, generate_key_thread,
+				  params, 0, &threadid)) {
+		    MessageBox(hwnd, "Out of thread resources",
+			       "Key generation error",
+			       MB_OK | MB_ICONERROR);
+		    sfree(params);
+		} else {
+		    state->generation_thread_exists = TRUE;
+		}
 	    }
 	}
 	break;
@@ -1110,10 +1102,8 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
 	    state =
 		(struct MainDlgState *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	    if (!state->generation_thread_exists) {
-                unsigned raw_entropy_required;
-                unsigned char *raw_entropy_buf;
 		BOOL ok;
-		state->key_bits = GetDlgItemInt(hwnd, IDC_BITS, &ok, false);
+		state->key_bits = GetDlgItemInt(hwnd, IDC_BITS, &ok, FALSE);
 		if (!ok)
 		    state->key_bits = DEFAULT_KEY_BITS;
                 {
@@ -1146,7 +1136,7 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
 		    if (ret != IDOK)
 			break;
 		    state->key_bits = DEFAULT_KEY_BITS;
-		    SetDlgItemInt(hwnd, IDC_BITS, DEFAULT_KEY_BITS, false);
+		    SetDlgItemInt(hwnd, IDC_BITS, DEFAULT_KEY_BITS, FALSE);
 		} else if ((state->keytype == RSA || state->keytype == DSA) &&
                            state->key_bits < DEFAULT_KEY_BITS) {
                     char *message = dupprintf
@@ -1159,69 +1149,39 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
 			break;
                 }
 
+		ui_set_state(hwnd, state, 1);
+		SetDlgItemText(hwnd, IDC_GENERATING, entropy_msg);
+		state->key_exists = FALSE;
+		state->collecting_entropy = TRUE;
+
+		/*
+		 * My brief statistical tests on mouse movements
+		 * suggest that there are about 2.5 bits of
+		 * randomness in the x position, 2.5 in the y
+		 * position, and 1.7 in the message time, making
+		 * 5.7 bits of unpredictability per mouse movement.
+		 * However, other people have told me it's far less
+		 * than that, so I'm going to be stupidly cautious
+		 * and knock that down to a nice round 2. With this
+		 * method, we require two words per mouse movement,
+		 * so with 2 bits per mouse movement we expect 2
+		 * bits every 2 words.
+		 */
 		if (state->keytype == RSA || state->keytype == DSA)
-                    raw_entropy_required = (state->key_bits / 2) * 2;
+                    state->entropy_required = (state->key_bits / 2) * 2;
 		else if (state->keytype == ECDSA)
-                    raw_entropy_required = (state->curve_bits / 2) * 2;
+                    state->entropy_required = (state->curve_bits / 2) * 2;
                 else
-                    raw_entropy_required = 256;
+                    state->entropy_required = 256;
 
-                /* Bound the entropy collection above by the amount of
-                 * data we can actually fit into the PRNG. Any more
-                 * than that and it's doing no more good. */
-                if (raw_entropy_required > random_seed_bits())
-                    raw_entropy_required = random_seed_bits();
+		state->entropy_got = 0;
+		state->entropy_size = (state->entropy_required *
+				       sizeof(unsigned));
+		state->entropy = snewn(state->entropy_required, unsigned);
 
-                raw_entropy_buf = snewn(raw_entropy_required, unsigned char);
-                if (win_read_random(raw_entropy_buf, raw_entropy_required)) {
-                    /*
-                     * If we can get entropy from CryptGenRandom, use
-                     * it. But CryptGenRandom isn't a kernel-level
-                     * CPRNG (according to Wikipedia), and papers have
-                     * been published cryptanalysing it. So we'll
-                     * still do manual entropy collection; we'll just
-                     * do it _as well_ as this.
-                     */
-                    random_reseed(
-                        make_ptrlen(raw_entropy_buf, raw_entropy_required));
-                }
-
-                /*
-                 * Manual entropy input, by making the user wave the
-                 * mouse over the window a lot.
-                 *
-                 * My brief statistical tests on mouse movements
-                 * suggest that there are about 2.5 bits of randomness
-                 * in the x position, 2.5 in the y position, and 1.7
-                 * in the message time, making 5.7 bits of
-                 * unpredictability per mouse movement. However, other
-                 * people have told me it's far less than that, so I'm
-                 * going to be stupidly cautious and knock that down
-                 * to a nice round 2. With this method, we require two
-                 * words per mouse movement, so with 2 bits per mouse
-                 * movement we expect 2 bits every 2 words, i.e. the
-                 * number of _words_ of mouse data we want to collect
-                 * is just the same as the number of _bits_ of entropy
-                 * we want.
-                 */
-                state->entropy_required = raw_entropy_required;
-
-                ui_set_state(hwnd, state, 1);
-                SetDlgItemText(hwnd, IDC_GENERATING, entropy_msg);
-                state->key_exists = false;
-                state->collecting_entropy = true;
-
-                state->entropy_got = 0;
-                state->entropy_size = (state->entropy_required *
-                                       sizeof(unsigned));
-                state->entropy = snewn(state->entropy_required, unsigned);
-
-                SendDlgItemMessage(hwnd, IDC_PROGRESS, PBM_SETRANGE, 0,
-                                   MAKELPARAM(0, state->entropy_required));
-                SendDlgItemMessage(hwnd, IDC_PROGRESS, PBM_SETPOS, 0, 0);
-
-                smemclr(raw_entropy_buf, raw_entropy_required);
-                sfree(raw_entropy_buf);
+		SendDlgItemMessage(hwnd, IDC_PROGRESS, PBM_SETRANGE, 0,
+				   MAKELPARAM(0, state->entropy_required));
+		SendDlgItemMessage(hwnd, IDC_PROGRESS, PBM_SETPOS, 0, 0);
 	    }
 	    break;
 	  case IDC_SAVE:
@@ -1286,7 +1246,7 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
                     }
 		}
 		if (prompt_keyfile(hwnd, "Save private key as:",
-				   filename, true, (type == realtype))) {
+				   filename, 1, (type == realtype))) {
 		    int ret;
 		    FILE *fp = fopen(filename, "r");
 		    if (fp) {
@@ -1319,9 +1279,8 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
                             ret = export_ssh1(fn, type, &state->key,
                                               *passphrase ? passphrase : NULL);
                         else
-                            ret = rsa_ssh1_savekey(
-                                fn, &state->key,
-                                *passphrase ? passphrase : NULL);
+                            ret = saversakey(fn, &state->key,
+                                             *passphrase ? passphrase : NULL);
                         filename_free(fn);
 		    }
 		    if (ret <= 0) {
@@ -1340,7 +1299,7 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
 	    if (state->key_exists) {
 		char filename[FILENAME_MAX];
 		if (prompt_keyfile(hwnd, "Save public key as:",
-				   filename, true, false)) {
+				   filename, 1, 0)) {
 		    int ret;
 		    FILE *fp = fopen(filename, "r");
 		    if (fp) {
@@ -1360,13 +1319,13 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
                                    "PuTTYgen Error", MB_OK | MB_ICONERROR);
                     } else {
                         if (state->ssh2) {
-                            strbuf *blob = strbuf_new();
-                            ssh_key_public_blob(
-                                state->ssh2key.key, BinarySink_UPCAST(blob));
+                            int bloblen;
+                            unsigned char *blob;
+                            blob = state->ssh2key.alg->public_blob
+                                (state->ssh2key.data, &bloblen);
                             ssh2_write_pubkey(fp, state->ssh2key.comment,
-                                              blob->u, blob->len,
+                                              blob, bloblen,
                                               SSH_KEYTYPE_SSH2_PUBLIC_RFC4716);
-                            strbuf_free(blob);
                         } else {
                             ssh1_write_pubkey(fp, &state->key);
                         }
@@ -1386,8 +1345,8 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
 		(struct MainDlgState *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	    if (!state->generation_thread_exists) {
 		char filename[FILENAME_MAX];
-		if (prompt_keyfile(hwnd, "Load private key:", filename, false,
-                                   LOWORD(wParam) == IDC_LOAD)) {
+		if (prompt_keyfile(hwnd, "Load private key:",
+				   filename, 0, LOWORD(wParam)==IDC_LOAD)) {
                     Filename *fn = filename_from_str(filename);
 		    load_key_file(hwnd, state, fn, LOWORD(wParam) != IDC_LOAD);
                     filename_free(fn);
@@ -1398,20 +1357,24 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
 	return 0;
       case WM_DONEKEY:
 	state = (struct MainDlgState *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
-	state->generation_thread_exists = false;
-	state->key_exists = true;
+	state->generation_thread_exists = FALSE;
+	state->key_exists = TRUE;
 	SendDlgItemMessage(hwnd, IDC_PROGRESS, PBM_SETRANGE, 0,
 			   MAKELPARAM(0, PROGRESSRANGE));
 	SendDlgItemMessage(hwnd, IDC_PROGRESS, PBM_SETPOS, PROGRESSRANGE, 0);
 	if (state->ssh2) {
             if (state->keytype == DSA) {
-		state->ssh2key.key = &state->dsskey.sshk;
+		state->ssh2key.data = &state->dsskey;
+		state->ssh2key.alg = &ssh_dss;
             } else if (state->keytype == ECDSA) {
-                state->ssh2key.key = &state->eckey.sshk;
+                state->ssh2key.data = &state->eckey;
+                state->ssh2key.alg = state->eckey.signalg;
             } else if (state->keytype == ED25519) {
-                state->ssh2key.key = &state->edkey.sshk;
+                state->ssh2key.data = &state->eckey;
+                state->ssh2key.alg = &ssh_ecdsa_ed25519;
 	    } else {
-		state->ssh2key.key = &state->key.sshk;
+		state->ssh2key.data = &state->key;
+		state->ssh2key.alg = &ssh_rsa;
 	    }
 	    state->commentptr = &state->ssh2key.comment;
 	} else {
@@ -1441,7 +1404,7 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
 	 * Now update the key controls with all the key data.
 	 */
 	{
-	    char *fp, *savecomment;
+	    char *savecomment;
 	    /*
 	     * Blank passphrase, initially. This isn't dangerous,
 	     * because we will warn (Are You Sure?) before allowing
@@ -1458,12 +1421,16 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
 	     */
 	    savecomment = *state->commentptr;
 	    *state->commentptr = NULL;
-	    if (state->ssh2)
-		fp = ssh2_fingerprint(state->ssh2key.key);
-            else
-                fp = rsa_ssh1_fingerprint(&state->key);
-            SetDlgItemText(hwnd, IDC_FINGERPRINT, fp);
-            sfree(fp);
+	    if (state->ssh2) {
+		char *fp;
+		fp = ssh2_fingerprint(state->ssh2key.alg, state->ssh2key.data);
+		SetDlgItemText(hwnd, IDC_FINGERPRINT, fp);
+		sfree(fp);
+	    } else {
+		char buf[128];
+		rsa_fingerprint(buf, sizeof(buf), &state->key);
+		SetDlgItemText(hwnd, IDC_FINGERPRINT, buf);
+	    }
 	    *state->commentptr = savecomment;
 	    /*
 	     * Construct a decimal representation of the key, for
@@ -1591,7 +1558,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 	}
     }
 
-    random_setup_special();
+    random_ref();
     ret = DialogBox(hinst, MAKEINTRESOURCE(201), NULL, MainDlgProc) != IDOK;
 
     cleanup_exit(ret);

@@ -41,7 +41,7 @@
 DECL_WINDOWS_FUNCTION(static, void, InitCommonControls, (void));
 DECL_WINDOWS_FUNCTION(static, BOOL, MakeDragList, (HWND));
 DECL_WINDOWS_FUNCTION(static, int, LBItemFromPt, (HWND, POINT, BOOL));
-DECL_WINDOWS_FUNCTION(static, void, DrawInsert, (HWND, HWND, int));
+DECL_WINDOWS_FUNCTION(static, int, DrawInsert, (HWND, HWND, int));
 
 void init_common_controls(void)
 {
@@ -92,7 +92,7 @@ HWND doctl(struct ctlpos *cp, RECT r,
 	ctl = CreateWindowEx(exstyle, wclass, wtext, wstyle,
 			     r.left, r.top, r.right, r.bottom,
 			     cp->hwnd, (HMENU)(ULONG_PTR)wid, hinst, NULL);
-	SendMessage(ctl, WM_SETFONT, cp->font, MAKELPARAM(true, 0));
+	SendMessage(ctl, WM_SETFONT, cp->font, MAKELPARAM(TRUE, 0));
 
 	if (!strcmp(wclass, "LISTBOX")) {
 	    /*
@@ -165,7 +165,7 @@ void endbox(struct ctlpos *cp)
 /*
  * A static line, followed by a full-width edit box.
  */
-void editboxfw(struct ctlpos *cp, bool password, char *text,
+void editboxfw(struct ctlpos *cp, int password, char *text,
 	       int staticid, int editid)
 {
     RECT r;
@@ -534,7 +534,7 @@ void staticbtn(struct ctlpos *cp, char *stext, int sid,
 /*
  * A simple push button.
  */
-void button(struct ctlpos *cp, char *btext, int bid, bool defbtn)
+void button(struct ctlpos *cp, char *btext, int bid, int defbtn)
 {
     RECT r;
 
@@ -769,7 +769,7 @@ void bigeditctrl(struct ctlpos *cp, char *stext,
  * A list box with a static labelling it.
  */
 void listbox(struct ctlpos *cp, char *stext,
-	     int sid, int lid, int lines, bool multi)
+	     int sid, int lid, int lines, int multi)
 {
     RECT r;
 
@@ -981,7 +981,7 @@ static void pl_moveitem(HWND hwnd, int listid, int src, int dst)
     SendDlgItemMessage (hwnd, listid, LB_GETTEXT, src, (LPARAM) txt);
     val = SendDlgItemMessage (hwnd, listid, LB_GETITEMDATA, src, 0);
     /* Deselect old location. */
-    SendDlgItemMessage (hwnd, listid, LB_SETSEL, false, src);
+    SendDlgItemMessage (hwnd, listid, LB_SETSEL, FALSE, src);
     /* Delete it at the old location. */
     SendDlgItemMessage (hwnd, listid, LB_DELETESTRING, src, 0);
     /* Insert it at new location. */
@@ -994,7 +994,7 @@ static void pl_moveitem(HWND hwnd, int listid, int src, int dst)
     sfree (txt);
 }
 
-int pl_itemfrompt(HWND hwnd, POINT cursor, bool scroll)
+int pl_itemfrompt(HWND hwnd, POINT cursor, BOOL scroll)
 {
     int ret;
     POINT uppoint, downpoint;
@@ -1014,14 +1014,14 @@ int pl_itemfrompt(HWND hwnd, POINT cursor, bool scroll)
     ret = p_LBItemFromPt(hwnd, cursor, scroll);
     if (ret == -1)
 	return ret;
-    ret = p_LBItemFromPt(hwnd, cursor, false);
+    ret = p_LBItemFromPt(hwnd, cursor, FALSE);
     updist = downdist = 0;
     for (i = 1; i < 4096 && (!updist || !downdist); i++) {
 	uppoint = downpoint = cursor;
 	uppoint.y -= i;
 	downpoint.y += i;
-	upitem = p_LBItemFromPt(hwnd, uppoint, false);
-	downitem = p_LBItemFromPt(hwnd, downpoint, false);
+	upitem = p_LBItemFromPt(hwnd, uppoint, FALSE);
+	downitem = p_LBItemFromPt(hwnd, downpoint, FALSE);
 	if (!updist && upitem != ret)
 	    updist = i;
 	if (!downdist && downitem != ret)
@@ -1036,12 +1036,12 @@ int pl_itemfrompt(HWND hwnd, POINT cursor, bool scroll)
  * Handler for prefslist above.
  * 
  * Return value has bit 0 set if the dialog box procedure needs to
- * return true from handling this message; it has bit 1 set if a
+ * return TRUE from handling this message; it has bit 1 set if a
  * change may have been made in the contents of the list.
  */
 int handle_prefslist(struct prefslist *hdl,
                      int *array, int maxmemb,
-                     bool is_dlmsg, HWND hwnd,
+                     int is_dlmsg, HWND hwnd,
 		     WPARAM wParam, LPARAM lParam)
 {
     int i;
@@ -1062,20 +1062,20 @@ int handle_prefslist(struct prefslist *hdl,
 		    SendDlgItemMessage(hwnd, hdl->listid,
 				       LB_ADDSTRING, 0, (LPARAM) "");
 
-                hdl->srcitem = p_LBItemFromPt(dlm->hWnd, dlm->ptCursor, true);
-		hdl->dragging = false;
+                hdl->srcitem = p_LBItemFromPt(dlm->hWnd, dlm->ptCursor, TRUE);
+		hdl->dragging = 0;
 		/* XXX hack Q183115 */
-		SetWindowLongPtr(hwnd, DWLP_MSGRESULT, true);
+		SetWindowLongPtr(hwnd, DWLP_MSGRESULT, TRUE);
                 ret |= 1; break;
               case DL_CANCELDRAG:
 		p_DrawInsert(hwnd, dlm->hWnd, -1);     /* Clear arrow */
 		SendDlgItemMessage(hwnd, hdl->listid,
 				   LB_DELETESTRING, hdl->dummyitem, 0);
-		hdl->dragging = false;
+		hdl->dragging = 0;
                 ret |= 1; break;
               case DL_DRAGGING:
-		hdl->dragging = true;
-		dest = pl_itemfrompt(dlm->hWnd, dlm->ptCursor, true);
+		hdl->dragging = 1;
+		dest = pl_itemfrompt(dlm->hWnd, dlm->ptCursor, TRUE);
 		if (dest > hdl->dummyitem) dest = hdl->dummyitem;
 		p_DrawInsert (hwnd, dlm->hWnd, dest);
 		if (dest >= 0)
@@ -1085,14 +1085,14 @@ int handle_prefslist(struct prefslist *hdl,
                 ret |= 1; break;
               case DL_DROPPED:
 		if (hdl->dragging) {
-		    dest = pl_itemfrompt(dlm->hWnd, dlm->ptCursor, true);
+		    dest = pl_itemfrompt(dlm->hWnd, dlm->ptCursor, TRUE);
 		    if (dest > hdl->dummyitem) dest = hdl->dummyitem;
 		    p_DrawInsert (hwnd, dlm->hWnd, -1);
 		}
 		SendDlgItemMessage(hwnd, hdl->listid,
 				   LB_DELETESTRING, hdl->dummyitem, 0);
 		if (hdl->dragging) {
-		    hdl->dragging = false;
+		    hdl->dragging = 0;
 		    if (dest >= 0) {
 			/* Correct for "missing" item. */
 			if (dest > hdl->srcitem) dest--;
@@ -1211,7 +1211,7 @@ void winctrl_add_shortcuts(struct dlgparam *dp, struct winctrl *c)
 	if (c->shortcuts[i] != NO_SHORTCUT) {
 	    unsigned char s = tolower((unsigned char)c->shortcuts[i]);
 	    assert(!dp->shortcuts[s]);
-	    dp->shortcuts[s] = true;
+	    dp->shortcuts[s] = TRUE;
 	}
 }
 
@@ -1222,7 +1222,7 @@ void winctrl_rem_shortcuts(struct dlgparam *dp, struct winctrl *c)
 	if (c->shortcuts[i] != NO_SHORTCUT) {
 	    unsigned char s = tolower((unsigned char)c->shortcuts[i]);
 	    assert(dp->shortcuts[s]);
-	    dp->shortcuts[s] = false;
+	    dp->shortcuts[s] = FALSE;
 	}
 }
 
@@ -1654,7 +1654,7 @@ void winctrl_layout(struct dlgparam *dp, struct winctrls *wc,
 	    shortcuts[nshortcuts++] = ctrl->fontselect.shortcut;
 	    statictext(&pos, escaped, 1, base_id);
 	    staticbtn(&pos, "", base_id+1, "Change...", base_id+2);
-            data = fontspec_new("", false, 0, 0);
+            data = fontspec_new("", 0, 0, 0);
 	    sfree(escaped);
 	    break;
 	  default:
@@ -1710,7 +1710,7 @@ void winctrl_layout(struct dlgparam *dp, struct winctrls *wc,
 }
 
 static void winctrl_set_focus(union control *ctrl, struct dlgparam *dp,
-			      bool has_focus)
+			      int has_focus)
 {
     if (has_focus) {
 	if (dp->focused)
@@ -1722,8 +1722,9 @@ static void winctrl_set_focus(union control *ctrl, struct dlgparam *dp,
     }
 }
 
-union control *dlg_last_focused(union control *ctrl, dlgparam *dp)
+union control *dlg_last_focused(union control *ctrl, void *dlg)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     return dp->focused == ctrl ? dp->lastfocused : dp->focused;
 }
 
@@ -1731,13 +1732,12 @@ union control *dlg_last_focused(union control *ctrl, dlgparam *dp)
  * The dialog-box procedure calls this function to handle Windows
  * messages on a control we manage.
  */
-bool winctrl_handle_command(struct dlgparam *dp, UINT msg,
-                            WPARAM wParam, LPARAM lParam)
+int winctrl_handle_command(struct dlgparam *dp, UINT msg,
+			   WPARAM wParam, LPARAM lParam)
 {
     struct winctrl *c;
     union control *ctrl;
-    int i, id;
-    bool ret;
+    int i, id, ret;
     static UINT draglistmsg = WM_NULL;
 
     /*
@@ -1748,7 +1748,7 @@ bool winctrl_handle_command(struct dlgparam *dp, UINT msg,
 	draglistmsg = RegisterWindowMessage (DRAGLISTMSGSTRING);
 
     if (msg != draglistmsg && msg != WM_COMMAND && msg != WM_DRAWITEM)
-	return false;
+	return 0;
 
     /*
      * Look up the control ID in our data.
@@ -1760,7 +1760,7 @@ bool winctrl_handle_command(struct dlgparam *dp, UINT msg,
 	    break;
     }
     if (!c)
-	return false;                  /* we have nothing to do */
+	return 0;		       /* we have nothing to do */
 
     if (msg == WM_DRAWITEM) {
 	/*
@@ -1781,14 +1781,14 @@ bool winctrl_handle_command(struct dlgparam *dp, UINT msg,
 		r.top + (r.bottom-r.top-s.cy)/2,
 		(char *)c->data, strlen((char *)c->data));
 
-	return true;
+	return TRUE;
     }
 
     ctrl = c->ctrl;
     id = LOWORD(wParam) - c->base_id;
 
     if (!ctrl || !ctrl->generic.handler)
-	return false;                  /* nothing we can do here */
+	return 0;		       /* nothing we can do here */
 
     /*
      * From here on we do not issue `return' statements until the
@@ -1797,8 +1797,8 @@ bool winctrl_handle_command(struct dlgparam *dp, UINT msg,
      * to reach the end of this switch statement so that the
      * subsequent code can test dp->coloursel_wanted().
      */
-    ret = false;
-    dp->coloursel_wanted = false;
+    ret = 0;
+    dp->coloursel_wanted = FALSE;
 
     /*
      * Now switch on the control type and the message.
@@ -1934,7 +1934,7 @@ bool winctrl_handle_command(struct dlgparam *dp, UINT msg,
 	    of.lpstrFileTitle = NULL;
 	    of.lpstrTitle = ctrl->fileselect.title;
 	    of.Flags = 0;
-	    if (request_file(NULL, &of, false, ctrl->fileselect.for_writing)) {
+	    if (request_file(NULL, &of, FALSE, ctrl->fileselect.for_writing)) {
 		SetDlgItemText(dp->hwnd, c->base_id + 1, filename);
 		ctrl->generic.handler(ctrl, dp, dp->data, EVENT_VALCHANGE);
 	    }
@@ -2009,9 +2009,9 @@ bool winctrl_handle_command(struct dlgparam *dp, UINT msg,
 		(unsigned char) (cc.rgbResult >> 8) & 0xFF;
 	    dp->coloursel_result.b =
 		(unsigned char) (cc.rgbResult >> 16) & 0xFF;
-	    dp->coloursel_result.ok = true;
+	    dp->coloursel_result.ok = TRUE;
 	} else
-	    dp->coloursel_result.ok = false;
+	    dp->coloursel_result.ok = FALSE;
 	ctrl->generic.handler(ctrl, dp, dp->data, EVENT_CALLBACK);
     }
 
@@ -2020,9 +2020,9 @@ bool winctrl_handle_command(struct dlgparam *dp, UINT msg,
 
 /*
  * This function can be called to produce context help on a
- * control. Returns true if it has actually launched some help.
+ * control. Returns TRUE if it has actually launched some help.
  */
-bool winctrl_context_help(struct dlgparam *dp, HWND hwnd, int id)
+int winctrl_context_help(struct dlgparam *dp, HWND hwnd, int id)
 {
     int i;
     struct winctrl *c;
@@ -2037,17 +2037,17 @@ bool winctrl_context_help(struct dlgparam *dp, HWND hwnd, int id)
 	    break;
     }
     if (!c)
-	return false;                  /* we have nothing to do */
+	return 0;		       /* we have nothing to do */
 
     /*
      * This is the Windows front end, so we're allowed to assume
      * `helpctx.p' is a context string.
      */
     if (!c->ctrl || !c->ctrl->generic.helpctx.p)
-	return false;            /* no help available for this ctrl */
+	return 0;		       /* no help available for this ctrl */
 
     launch_help(hwnd, c->ctrl->generic.helpctx.p);
-    return true;
+    return 1;
 }
 
 /*
@@ -2067,8 +2067,9 @@ static struct winctrl *dlg_findbyctrl(struct dlgparam *dp, union control *ctrl)
     return NULL;
 }
 
-void dlg_radiobutton_set(union control *ctrl, dlgparam *dp, int whichbutton)
+void dlg_radiobutton_set(union control *ctrl, void *dlg, int whichbutton)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     assert(c && c->ctrl->generic.type == CTRL_RADIO);
     CheckRadioButton(dp->hwnd,
@@ -2077,8 +2078,9 @@ void dlg_radiobutton_set(union control *ctrl, dlgparam *dp, int whichbutton)
 		     c->base_id + 1 + whichbutton);
 }
 
-int dlg_radiobutton_get(union control *ctrl, dlgparam *dp)
+int dlg_radiobutton_get(union control *ctrl, void *dlg)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     int i;
     assert(c && c->ctrl->generic.type == CTRL_RADIO);
@@ -2089,37 +2091,42 @@ int dlg_radiobutton_get(union control *ctrl, dlgparam *dp)
     return 0;
 }
 
-void dlg_checkbox_set(union control *ctrl, dlgparam *dp, bool checked)
+void dlg_checkbox_set(union control *ctrl, void *dlg, int checked)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     assert(c && c->ctrl->generic.type == CTRL_CHECKBOX);
-    CheckDlgButton(dp->hwnd, c->base_id, checked);
+    CheckDlgButton(dp->hwnd, c->base_id, (checked != 0));
 }
 
-bool dlg_checkbox_get(union control *ctrl, dlgparam *dp)
+int dlg_checkbox_get(union control *ctrl, void *dlg)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     assert(c && c->ctrl->generic.type == CTRL_CHECKBOX);
     return 0 != IsDlgButtonChecked(dp->hwnd, c->base_id);
 }
 
-void dlg_editbox_set(union control *ctrl, dlgparam *dp, char const *text)
+void dlg_editbox_set(union control *ctrl, void *dlg, char const *text)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     assert(c && c->ctrl->generic.type == CTRL_EDITBOX);
     SetDlgItemText(dp->hwnd, c->base_id+1, text);
 }
 
-char *dlg_editbox_get(union control *ctrl, dlgparam *dp)
+char *dlg_editbox_get(union control *ctrl, void *dlg)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     assert(c && c->ctrl->generic.type == CTRL_EDITBOX);
     return GetDlgItemText_alloc(dp->hwnd, c->base_id+1);
 }
 
 /* The `listbox' functions can also apply to combo boxes. */
-void dlg_listbox_clear(union control *ctrl, dlgparam *dp)
+void dlg_listbox_clear(union control *ctrl, void *dlg)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     int msg;
     assert(c &&
@@ -2131,8 +2138,9 @@ void dlg_listbox_clear(union control *ctrl, dlgparam *dp)
     SendDlgItemMessage(dp->hwnd, c->base_id+1, msg, 0, 0);
 }
 
-void dlg_listbox_del(union control *ctrl, dlgparam *dp, int index)
+void dlg_listbox_del(union control *ctrl, void *dlg, int index)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     int msg;
     assert(c &&
@@ -2144,8 +2152,9 @@ void dlg_listbox_del(union control *ctrl, dlgparam *dp, int index)
     SendDlgItemMessage(dp->hwnd, c->base_id+1, msg, index, 0);
 }
 
-void dlg_listbox_add(union control *ctrl, dlgparam *dp, char const *text)
+void dlg_listbox_add(union control *ctrl, void *dlg, char const *text)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     int msg;
     assert(c &&
@@ -2164,9 +2173,10 @@ void dlg_listbox_add(union control *ctrl, dlgparam *dp, char const *text)
  * strings in any listbox then you MUST not assign them different
  * IDs and expect to get meaningful results back.
  */
-void dlg_listbox_addwithid(union control *ctrl, dlgparam *dp,
+void dlg_listbox_addwithid(union control *ctrl, void *dlg,
 			   char const *text, int id)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     int msg, msg2, index;
     assert(c &&
@@ -2181,8 +2191,9 @@ void dlg_listbox_addwithid(union control *ctrl, dlgparam *dp,
     SendDlgItemMessage(dp->hwnd, c->base_id+1, msg2, index, (LPARAM)id);
 }
 
-int dlg_listbox_getid(union control *ctrl, dlgparam *dp, int index)
+int dlg_listbox_getid(union control *ctrl, void *dlg, int index)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     int msg;
     assert(c && c->ctrl->generic.type == CTRL_LISTBOX);
@@ -2192,8 +2203,9 @@ int dlg_listbox_getid(union control *ctrl, dlgparam *dp, int index)
 }
 
 /* dlg_listbox_index returns <0 if no single element is selected. */
-int dlg_listbox_index(union control *ctrl, dlgparam *dp)
+int dlg_listbox_index(union control *ctrl, void *dlg)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     int msg, ret;
     assert(c && c->ctrl->generic.type == CTRL_LISTBOX);
@@ -2211,8 +2223,9 @@ int dlg_listbox_index(union control *ctrl, dlgparam *dp)
 	return ret;
 }
 
-bool dlg_listbox_issel(union control *ctrl, dlgparam *dp, int index)
+int dlg_listbox_issel(union control *ctrl, void *dlg, int index)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     assert(c && c->ctrl->generic.type == CTRL_LISTBOX &&
 	   c->ctrl->listbox.multisel &&
@@ -2221,8 +2234,9 @@ bool dlg_listbox_issel(union control *ctrl, dlgparam *dp, int index)
 	SendDlgItemMessage(dp->hwnd, c->base_id+1, LB_GETSEL, index, 0);
 }
 
-void dlg_listbox_select(union control *ctrl, dlgparam *dp, int index)
+void dlg_listbox_select(union control *ctrl, void *dlg, int index)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     int msg;
     assert(c && c->ctrl->generic.type == CTRL_LISTBOX &&
@@ -2231,15 +2245,17 @@ void dlg_listbox_select(union control *ctrl, dlgparam *dp, int index)
     SendDlgItemMessage(dp->hwnd, c->base_id+1, msg, index, 0);
 }
 
-void dlg_text_set(union control *ctrl, dlgparam *dp, char const *text)
+void dlg_text_set(union control *ctrl, void *dlg, char const *text)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     assert(c && c->ctrl->generic.type == CTRL_TEXT);
     SetDlgItemText(dp->hwnd, c->base_id, text);
 }
 
-void dlg_label_change(union control *ctrl, dlgparam *dp, char const *text)
+void dlg_label_change(union control *ctrl, void *dlg, char const *text)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     char *escaped = NULL;
     int id = -1;
@@ -2284,15 +2300,17 @@ void dlg_label_change(union control *ctrl, dlgparam *dp, char const *text)
     }
 }
 
-void dlg_filesel_set(union control *ctrl, dlgparam *dp, Filename *fn)
+void dlg_filesel_set(union control *ctrl, void *dlg, Filename *fn)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     assert(c && c->ctrl->generic.type == CTRL_FILESELECT);
     SetDlgItemText(dp->hwnd, c->base_id+1, fn->path);
 }
 
-Filename *dlg_filesel_get(union control *ctrl, dlgparam *dp)
+Filename *dlg_filesel_get(union control *ctrl, void *dlg)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     char *tmp;
     Filename *ret;
@@ -2303,9 +2321,10 @@ Filename *dlg_filesel_get(union control *ctrl, dlgparam *dp)
     return ret;
 }
 
-void dlg_fontsel_set(union control *ctrl, dlgparam *dp, FontSpec *fs)
+void dlg_fontsel_set(union control *ctrl, void *dlg, FontSpec *fs)
 {
     char *buf, *boldstr;
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     assert(c && c->ctrl->generic.type == CTRL_FONTSELECT);
 
@@ -2325,8 +2344,9 @@ void dlg_fontsel_set(union control *ctrl, dlgparam *dp, FontSpec *fs)
     dlg_auto_set_fixed_pitch_flag(dp);
 }
 
-FontSpec *dlg_fontsel_get(union control *ctrl, dlgparam *dp)
+FontSpec *dlg_fontsel_get(union control *ctrl, void *dlg)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     assert(c && c->ctrl->generic.type == CTRL_FONTSELECT);
     return fontspec_copy((FontSpec *)c->data);
@@ -2337,26 +2357,29 @@ FontSpec *dlg_fontsel_get(union control *ctrl, dlgparam *dp)
  * cause the front end (if possible) to delay updating the screen
  * until it's all complete, thus avoiding flicker.
  */
-void dlg_update_start(union control *ctrl, dlgparam *dp)
+void dlg_update_start(union control *ctrl, void *dlg)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     if (c && c->ctrl->generic.type == CTRL_LISTBOX) {
-	SendDlgItemMessage(dp->hwnd, c->base_id+1, WM_SETREDRAW, false, 0);
+	SendDlgItemMessage(dp->hwnd, c->base_id+1, WM_SETREDRAW, FALSE, 0);
     }
 }
 
-void dlg_update_done(union control *ctrl, dlgparam *dp)
+void dlg_update_done(union control *ctrl, void *dlg)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     if (c && c->ctrl->generic.type == CTRL_LISTBOX) {
 	HWND hw = GetDlgItem(dp->hwnd, c->base_id+1);
-	SendMessage(hw, WM_SETREDRAW, true, 0);
-	InvalidateRect(hw, NULL, true);
+	SendMessage(hw, WM_SETREDRAW, TRUE, 0);
+	InvalidateRect(hw, NULL, TRUE);
     }
 }
 
-void dlg_set_focus(union control *ctrl, dlgparam *dp)
+void dlg_set_focus(union control *ctrl, void *dlg)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     struct winctrl *c = dlg_findbyctrl(dp, ctrl);
     int id;
     HWND ctl;
@@ -2390,13 +2413,15 @@ void dlg_set_focus(union control *ctrl, dlgparam *dp)
  * indication to the user. dlg_beep() is a quick and easy generic
  * error; dlg_error() puts up a message-box or equivalent.
  */
-void dlg_beep(dlgparam *dp)
+void dlg_beep(void *dlg)
 {
+    /* struct dlgparam *dp = (struct dlgparam *)dlg; */
     MessageBeep(0);
 }
 
-void dlg_error_msg(dlgparam *dp, const char *msg)
+void dlg_error_msg(void *dlg, const char *msg)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     MessageBox(dp->hwnd, msg,
 	       dp->errtitle ? dp->errtitle : NULL,
 	       MB_OK | MB_ICONERROR);
@@ -2407,14 +2432,16 @@ void dlg_error_msg(dlgparam *dp, const char *msg)
  * processing is completed, and passes an integer value (typically
  * a success status).
  */
-void dlg_end(dlgparam *dp, int value)
+void dlg_end(void *dlg, int value)
 {
-    dp->ended = true;
+    struct dlgparam *dp = (struct dlgparam *)dlg;
+    dp->ended = TRUE;
     dp->endresult = value;
 }
 
-void dlg_refresh(union control *ctrl, dlgparam *dp)
+void dlg_refresh(union control *ctrl, void *dlg)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     int i, j;
     struct winctrl *c;
 
@@ -2440,35 +2467,38 @@ void dlg_refresh(union control *ctrl, dlgparam *dp)
     }
 }
 
-void dlg_coloursel_start(union control *ctrl, dlgparam *dp, int r, int g, int b)
+void dlg_coloursel_start(union control *ctrl, void *dlg, int r, int g, int b)
 {
-    dp->coloursel_wanted = true;
+    struct dlgparam *dp = (struct dlgparam *)dlg;
+    dp->coloursel_wanted = TRUE;
     dp->coloursel_result.r = r;
     dp->coloursel_result.g = g;
     dp->coloursel_result.b = b;
 }
 
-bool dlg_coloursel_results(union control *ctrl, dlgparam *dp,
-                           int *r, int *g, int *b)
+int dlg_coloursel_results(union control *ctrl, void *dlg,
+			  int *r, int *g, int *b)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     if (dp->coloursel_result.ok) {
 	*r = dp->coloursel_result.r;
 	*g = dp->coloursel_result.g;
 	*b = dp->coloursel_result.b;
-	return true;
+	return 1;
     } else
-	return false;
+	return 0;
 }
 
-void dlg_auto_set_fixed_pitch_flag(dlgparam *dp)
+void dlg_auto_set_fixed_pitch_flag(void *dlg)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     Conf *conf = (Conf *)dp->data;
     FontSpec *fs;
     int quality;
     HFONT hfont;
     HDC hdc;
     TEXTMETRIC tm;
-    bool is_var;
+    int is_var;
 
     /*
      * Attempt to load the current font, and see if it's
@@ -2483,7 +2513,7 @@ void dlg_auto_set_fixed_pitch_flag(dlgparam *dp)
     quality = conf_get_int(conf, CONF_font_quality);
     fs = conf_get_fontspec(conf, CONF_font);
 
-    hfont = CreateFont(0, 0, 0, 0, FW_DONTCARE, false, false, false,
+    hfont = CreateFont(0, 0, 0, 0, FW_DONTCARE, FALSE, FALSE, FALSE,
                        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                        CLIP_DEFAULT_PRECIS, FONT_QUALITY(quality),
                        FIXED_PITCH | FF_DONTCARE, fs->name);
@@ -2492,7 +2522,7 @@ void dlg_auto_set_fixed_pitch_flag(dlgparam *dp)
         /* Note that the TMPF_FIXED_PITCH bit is defined upside down :-( */
         is_var = (tm.tmPitchAndFamily & TMPF_FIXED_PITCH);
     } else {
-        is_var = false;                /* assume it's basically normal */
+        is_var = FALSE;                /* assume it's basically normal */
     }
     if (hdc)
         ReleaseDC(NULL, hdc);
@@ -2500,16 +2530,18 @@ void dlg_auto_set_fixed_pitch_flag(dlgparam *dp)
         DeleteObject(hfont);
 
     if (is_var)
-        dp->fixed_pitch_fonts = false;
+        dp->fixed_pitch_fonts = FALSE;
 }
 
-bool dlg_get_fixed_pitch_flag(dlgparam *dp)
+int dlg_get_fixed_pitch_flag(void *dlg)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     return dp->fixed_pitch_fonts;
 }
 
-void dlg_set_fixed_pitch_flag(dlgparam *dp, bool flag)
+void dlg_set_fixed_pitch_flag(void *dlg, int flag)
 {
+    struct dlgparam *dp = (struct dlgparam *)dlg;
     dp->fixed_pitch_fonts = flag;
 }
 
@@ -2517,12 +2549,12 @@ void dp_init(struct dlgparam *dp)
 {
     dp->nctrltrees = 0;
     dp->data = NULL;
-    dp->ended = false;
+    dp->ended = FALSE;
     dp->focused = dp->lastfocused = NULL;
     memset(dp->shortcuts, 0, sizeof(dp->shortcuts));
     dp->hwnd = NULL;
     dp->wintitle = dp->errtitle = NULL;
-    dp->fixed_pitch_fonts = true;
+    dp->fixed_pitch_fonts = TRUE;
 }
 
 void dp_add_tree(struct dlgparam *dp, struct winctrls *wc)

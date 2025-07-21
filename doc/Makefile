@@ -44,15 +44,13 @@ INPUTS = $(patsubst %,%.but,$(CHAPTERS))
 HALIBUT = halibut
 
 index.html: $(INPUTS)
-	$(HALIBUT) --text --html --chm $(INPUTS)
+	$(HALIBUT) --text --html --winhelp --chm $(INPUTS)
 
-# During formal builds it's useful to be able to build this one alone.
-putty.chm: $(INPUTS)
-	$(HALIBUT) --chm $(INPUTS)
-
-# We don't ship this any more.
+# During formal builds it's useful to be able to build these ones alone.
 putty.hlp: $(INPUTS)
 	$(HALIBUT) --winhelp $(INPUTS)
+putty.chm: $(INPUTS)
+	$(HALIBUT) --chm $(INPUTS)
 
 putty.info: $(INPUTS)
 	$(HALIBUT) --info $(INPUTS)

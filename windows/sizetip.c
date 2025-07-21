@@ -20,7 +20,7 @@ static LRESULT CALLBACK SizeTipWndProc(HWND hWnd, UINT nMsg,
 
     switch (nMsg) {
       case WM_ERASEBKGND:
-	return true;
+	return TRUE;
 
       case WM_PAINT:
 	{
@@ -80,7 +80,7 @@ static LRESULT CALLBACK SizeTipWndProc(HWND hWnd, UINT nMsg,
 
 	    SetWindowPos(hWnd, NULL, 0, 0, sz.cx + 6, sz.cy + 6,
 			 SWP_NOZORDER | SWP_NOMOVE | SWP_NOACTIVATE);
-	    InvalidateRect(hWnd, NULL, false);
+	    InvalidateRect(hWnd, NULL, FALSE);
 
 	    DeleteDC(hdc);
 	}
@@ -91,7 +91,7 @@ static LRESULT CALLBACK SizeTipWndProc(HWND hWnd, UINT nMsg,
 }
 
 static HWND tip_wnd = NULL;
-static bool tip_enabled = false;
+static int tip_enabled = 0;
 
 void UpdateSizeTip(HWND src, int cx, int cy)
 {
@@ -183,7 +183,7 @@ void UpdateSizeTip(HWND src, int cx, int cy)
     }
 }
 
-void EnableSizeTip(bool bEnable)
+void EnableSizeTip(int bEnable)
 {
     if (tip_wnd && !bEnable) {
 	DestroyWindow(tip_wnd);

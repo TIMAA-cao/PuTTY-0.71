@@ -2,8 +2,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "defs.h"
-
 /*
  * Calling signal() is non-portable, as it varies in meaning
  * between platforms and depending on feature macros, and has
@@ -27,7 +25,7 @@ void (*putty_signal(int sig, void (*func)(int)))(int) {
     return old.sa_handler;
 }
 
-void block_signal(int sig, bool block_it)
+void block_signal(int sig, int block_it)
 {
     sigset_t ss;
 

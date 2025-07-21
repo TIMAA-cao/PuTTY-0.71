@@ -5,13 +5,13 @@
 #include <assert.h>
 #include <string.h>
 
+#define DEFINE_PLUG_METHOD_MACROS
 #include "putty.h"
 #include "network.h"
 
-void backend_socket_log(Seat *seat, LogContext *logctx,
-                        int type, SockAddr *addr, int port,
+void backend_socket_log(void *frontend, int type, SockAddr addr, int port,
                         const char *error_msg, int error_code, Conf *conf,
-                        bool session_started)
+                        int session_started)
 {
     char addrbuf[256], *msg;
 
@@ -43,7 +43,7 @@ void backend_socket_log(Seat *seat, LogContext *logctx,
             if (log_to_term == AUTO)
                 log_to_term = session_started ? FORCE_OFF : FORCE_ON;
             if (log_to_term == FORCE_ON)
-                seat_stderr(seat, msg, len);
+                from_backend(frontend, TRUE, msg, len);
 
             msg[len-2] = '\0';         /* remove the \r\n again */
         }
@@ -54,20 +54,17 @@ void backend_socket_log(Seat *seat, LogContext *logctx,
     }
 
     if (msg) {
-        logevent(logctx, msg);
+        logevent(frontend, msg);
         sfree(msg);
     }
 }
 
-void psb_init(ProxyStderrBuf *psb)
-{
-    psb->size = 0;
-}
-
-void log_proxy_stderr(Plug *plug, ProxyStderrBuf *psb,
-                      const void *vdata, size_t len)
+void log_proxy_stderr(Plug plug, bufchain *buf, const void *vdata, int len)
 {
     const char *data = (const char *)vdata;
+    int pos = 0;
+    int msglen;
+    char *nlpos, *msg, *fullmsg;
 
     /*
      * This helper function allows us to collect the data written to a
@@ -75,77 +72,40 @@ void log_proxy_stderr(Plug *plug, ProxyStderrBuf *psb,
      * happen to get from its pipe, and whenever we have a complete
      * line, we pass it to plug_log.
      *
-     * (We also do this when the buffer in psb fills up, to avoid just
-     * allocating more and more memory forever, and also to keep Event
-     * Log lines reasonably bounded in size.)
-     *
-     * Prerequisites: a plug to log to, and a ProxyStderrBuf stored
-     * somewhere to collect any not-yet-output partial line.
+     * Prerequisites: a plug to log to, and a bufchain stored
+     * somewhere to collect the data in.
      */
 
-    while (len > 0) {
+    while (pos < len && (nlpos = memchr(data+pos, '\n', len-pos)) != NULL) {
         /*
-         * Copy as much data into psb->buf as will fit.
+         * Found a newline in the current input buffer. Append it to
+         * the bufchain (which may contain a partial line from last
+         * time).
          */
-        assert(psb->size < lenof(psb->buf));
-        size_t to_consume = lenof(psb->buf) - psb->size;
-        if (to_consume > len)
-            to_consume = len;
-        memcpy(psb->buf + psb->size, data, to_consume);
-        data += to_consume;
-        len -= to_consume;
-        psb->size += to_consume;
+        bufchain_add(buf, data + pos, nlpos - (data + pos));
 
         /*
-         * Output any full lines in psb->buf.
+         * Collect the resulting line of data and pass it to plug_log.
          */
-        size_t pos = 0;
-        while (pos < psb->size) {
-            char *nlpos = memchr(psb->buf + pos, '\n', psb->size - pos);
-            if (!nlpos)
-                break;
-
-            /*
-             * Found a newline in the buffer, so we can output a line.
-             */
-            size_t endpos = nlpos - psb->buf;
-            while (endpos > pos && (psb->buf[endpos-1] == '\n' ||
-                                    psb->buf[endpos-1] == '\r'))
-                endpos--;
-            char *msg = dupprintf(
-                "proxy: %.*s", (int)(endpos - pos), psb->buf + pos);
-            plug_log(plug, 2, NULL, 0, msg, 0);
-            sfree(msg);
-
-            pos = nlpos - psb->buf + 1;
-            assert(pos <= psb->size);
-        }
+        msglen = bufchain_size(buf);
+        msg = snewn(msglen+1, char);
+        bufchain_fetch(buf, msg, msglen);
+        bufchain_consume(buf, msglen);
+        msg[msglen] = '\0';
+        fullmsg = dupprintf("proxy: %s", msg);
+        plug_log(plug, 2, NULL, 0, fullmsg, 0);
+        sfree(fullmsg);
+        sfree(msg);
 
         /*
-         * If the buffer is completely full and we didn't output
-         * anything, then output the whole thing, flagging it as a
-         * truncated line.
+         * Advance past the newline.
          */
-        if (pos == 0 && psb->size == lenof(psb->buf)) {
-            char *msg = dupprintf(
-                "proxy (partial line): %.*s", (int)psb->size, psb->buf);
-            plug_log(plug, 2, NULL, 0, msg, 0);
-            sfree(msg);
-
-            pos = psb->size = 0;
-        }
-
-        /*
-         * Now move any remaining data up to the front of the buffer.
-         */
-        size_t newsize = psb->size - pos;
-        if (newsize)
-            memmove(psb->buf, psb->buf + pos, newsize);
-        psb->size = newsize;
-
-        /*
-         * And loop round again if there's more data to be read from
-         * our input.
-         */
+        pos += nlpos+1 - (data + pos);
     }
+
+    /*
+     * Now any remaining data is a partial line, which we save for
+     * next time.
+     */
+    bufchain_add(buf, data + pos, len - pos);
 }

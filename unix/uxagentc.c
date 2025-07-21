@@ -15,12 +15,12 @@
 #include "tree234.h"
 #include "puttymem.h"
 
-bool agent_exists(void)
+int agent_exists(void)
 {
     const char *p = getenv("SSH_AUTH_SOCK");
     if (p && *p)
-	return true;
-    return false;
+	return TRUE;
+    return FALSE;
 }
 
 static tree234 *agent_pending_queries;
@@ -54,12 +54,12 @@ static int agent_connfind(void *av, void *bv)
 }
 
 /*
- * Attempt to read from an agent socket fd. Returns false if the
- * expected response is as yet incomplete; returns true if it's either
- * complete (conn->retbuf non-NULL and filled with something useful)
- * or has failed totally (conn->retbuf is NULL).
+ * Attempt to read from an agent socket fd. Returns 0 if the expected
+ * response is as yet incomplete; returns 1 if it's either complete
+ * (conn->retbuf non-NULL and filled with something useful) or has
+ * failed totally (conn->retbuf is NULL).
  */
-static bool agent_try_read(agent_pending_query *conn)
+static int agent_try_read(agent_pending_query *conn)
 {
     int ret;
 
@@ -69,15 +69,15 @@ static bool agent_try_read(agent_pending_query *conn)
 	if (conn->retbuf != conn->sizebuf) sfree(conn->retbuf);
 	conn->retbuf = NULL;
 	conn->retlen = 0;
-        return true;
+        return 1;
     }
     conn->retlen += ret;
     if (conn->retsize == 4 && conn->retlen == 4) {
-	conn->retsize = toint(GET_32BIT_MSB_FIRST(conn->retbuf) + 4);
+	conn->retsize = toint(GET_32BIT(conn->retbuf) + 4);
 	if (conn->retsize <= 0) {
 	    conn->retbuf = NULL;
 	    conn->retlen = 0;
-            return true;                 /* way too large */
+            return -1;                 /* way too large */
 	}
 	assert(conn->retbuf == conn->sizebuf);
 	conn->retbuf = snewn(conn->retsize, char);
@@ -85,9 +85,9 @@ static bool agent_try_read(agent_pending_query *conn)
     }
 
     if (conn->retlen < conn->retsize)
-	return false;                  /* more data to come */
+	return 0;		       /* more data to come */
 
-    return true;
+    return 1;
 }
 
 void agent_cancel_query(agent_pending_query *conn)
@@ -95,8 +95,6 @@ void agent_cancel_query(agent_pending_query *conn)
     uxsel_del(conn->fd);
     close(conn->fd);
     del234(agent_pending_queries, conn);
-    if (conn->retbuf && conn->retbuf != conn->sizebuf)
-        sfree(conn->retbuf);
     sfree(conn);
 }
 
@@ -104,7 +102,7 @@ static void agent_select_result(int fd, int event)
 {
     agent_pending_query *conn;
 
-    assert(event == SELECT_R);  /* not selecting for anything but R */
+    assert(event == 1);		       /* not selecting for anything but R */
 
     conn = find234(agent_pending_queries, &fd, agent_connfind);
     if (!conn) {
@@ -116,17 +114,16 @@ static void agent_select_result(int fd, int event)
 	return;		       /* more data to come */
 
     /*
-     * We have now completed the agent query. Do the callback.
+     * We have now completed the agent query. Do the callback, and
+     * clean up. (Of course we don't free retbuf, since ownership
+     * of that passes to the callback.)
      */
     conn->callback(conn->callback_ctx, conn->retbuf, conn->retlen);
-    /* Null out conn->retbuf, since ownership of that buffer has
-     * passed to the callback. */
-    conn->retbuf = NULL;
     agent_cancel_query(conn);
 }
 
 agent_pending_query *agent_query(
-    strbuf *query, void **out, int *outlen,
+    void *in, int inlen, void **out, int *outlen,
     void (*callback)(void *, void *, int), void *callback_ctx)
 {
     char *name;
@@ -154,11 +151,8 @@ agent_pending_query *agent_query(
 	goto failure;
     }
 
-    strbuf_finalise_agent_query(query);
-
-    for (done = 0; done < query->len ;) {
-	int ret = write(sock, query->s + done,
-                        query->len - done);
+    for (done = 0; done < inlen ;) {
+	int ret = write(sock, (char *)in + done, inlen - done);
 	if (ret <= 0) {
 	    close(sock);
 	    goto failure;
@@ -203,7 +197,7 @@ agent_pending_query *agent_query(
 	agent_pending_queries = newtree234(agent_conncmp);
     add234(agent_pending_queries, conn);
 
-    uxsel_set(sock, SELECT_R, agent_select_result);
+    uxsel_set(sock, 1, agent_select_result);
     return conn;
 
     failure:

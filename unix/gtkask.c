@@ -14,7 +14,6 @@
 #include <gdk/gdkkeysyms.h>
 #endif
 
-#include "defs.h"
 #include "gtkfont.h"
 #include "gtkcompat.h"
 #include "gtkmisc.h"
@@ -28,8 +27,7 @@ struct drawing_area_ctx {
 #ifndef DRAW_DEFAULT_CAIRO
     GdkColor *cols;
 #endif
-    int width, height;
-    enum { NOT_CURRENT, CURRENT, GREYED_OUT } state;
+    int width, height, current;
 };
 
 struct askpass_ctx {
@@ -41,18 +39,15 @@ struct askpass_ctx {
 #endif
 #ifndef DRAW_DEFAULT_CAIRO
     GdkColormap *colmap;
-    GdkColor cols[3];
+    GdkColor cols[2];
 #endif
-    char *error_message;               /* if we finish without a passphrase */
-    char *passphrase;                  /* if we finish with one */
+    char *passphrase;
     int passlen, passsize;
 #if GTK_CHECK_VERSION(3,20,0)
     GdkSeat *seat;                     /* for gdk_seat_grab */
 #elif GTK_CHECK_VERSION(3,0,0)
     GdkDevice *keyboard;               /* for gdk_device_grab */
 #endif
-
-    int nattempts;
 };
 
 static void visually_acknowledge_keypress(struct askpass_ctx *ctx)
@@ -61,9 +56,9 @@ static void visually_acknowledge_keypress(struct askpass_ctx *ctx)
     new_active = rand() % (N_DRAWING_AREAS - 1);
     if (new_active >= ctx->active_area)
         new_active++;
-    ctx->drawingareas[ctx->active_area].state = NOT_CURRENT;
+    ctx->drawingareas[ctx->active_area].current = 0;
     gtk_widget_queue_draw(ctx->drawingareas[ctx->active_area].area);
-    ctx->drawingareas[new_active].state = CURRENT;
+    ctx->drawingareas[new_active].current = 1;
     gtk_widget_queue_draw(ctx->drawingareas[new_active].area);
     ctx->active_area = new_active;
 }
@@ -118,12 +113,11 @@ static gint key_event(GtkWidget *widget, GdkEventKey *event, gpointer data)
                event->type == GDK_KEY_PRESS) {
         smemclr(ctx->passphrase, ctx->passsize);
         ctx->passphrase = NULL;
-        ctx->error_message = dupstr("passphrase input cancelled");
         gtk_main_quit();
     } else {
 #if GTK_CHECK_VERSION(2,0,0)
         if (gtk_im_context_filter_keypress(ctx->imc, event))
-            return true;
+            return TRUE;
 #endif
 
         if (event->type == GDK_KEY_PRESS) {
@@ -159,7 +153,7 @@ static gint key_event(GtkWidget *widget, GdkEventKey *event, gpointer data)
             }
         }
     }
-    return true;
+    return TRUE;
 }
 
 #if GTK_CHECK_VERSION(2,0,0)
@@ -178,23 +172,21 @@ static gint configure_area(GtkWidget *widget, GdkEventConfigure *event,
     ctx->width = event->width;
     ctx->height = event->height;
     gtk_widget_queue_draw(widget);
-    return true;
+    return TRUE;
 }
 
 #ifdef DRAW_DEFAULT_CAIRO
 static void askpass_redraw_cairo(cairo_t *cr, struct drawing_area_ctx *ctx)
 {
-    double rgbval = (ctx->state == CURRENT ? 0 :
-                     ctx->state == NOT_CURRENT ? 1 : 0.5);
-    cairo_set_source_rgb(cr, rgbval, rgbval, rgbval);
+    cairo_set_source_rgb(cr, 1-ctx->current, 1-ctx->current, 1-ctx->current);
     cairo_paint(cr);
 }
 #else
 static void askpass_redraw_gdk(GdkWindow *win, struct drawing_area_ctx *ctx)
 {
     GdkGC *gc = gdk_gc_new(win);
-    gdk_gc_set_foreground(gc, &ctx->cols[ctx->state]);
-    gdk_draw_rectangle(win, gc, true, 0, 0, ctx->width, ctx->height);
+    gdk_gc_set_foreground(gc, &ctx->cols[ctx->current]);
+    gdk_draw_rectangle(win, gc, TRUE, 0, 0, ctx->width, ctx->height);
     gdk_gc_unref(gc);
 }
 #endif
@@ -204,7 +196,7 @@ static gint draw_area(GtkWidget *widget, cairo_t *cr, gpointer data)
 {
     struct drawing_area_ctx *ctx = (struct drawing_area_ctx *)data;
     askpass_redraw_cairo(cr, ctx);
-    return true;
+    return TRUE;
 }
 #else
 static gint expose_area(GtkWidget *widget, GdkEventExpose *event,
@@ -220,14 +212,13 @@ static gint expose_area(GtkWidget *widget, GdkEventExpose *event,
     askpass_redraw_gdk(gtk_widget_get_window(ctx->area), ctx);
 #endif
 
-    return true;
+    return TRUE;
 }
 #endif
 
-static gboolean try_grab_keyboard(gpointer vctx)
+static int try_grab_keyboard(struct askpass_ctx *ctx)
 {
-    struct askpass_ctx *ctx = (struct askpass_ctx *)vctx;
-    int i, ret;
+    int ret;
 
 #if GTK_CHECK_VERSION(3,20,0)
     /*
@@ -235,28 +226,16 @@ static gboolean try_grab_keyboard(gpointer vctx)
      * GdkSeat.
      */
     GdkSeat *seat;
-    GdkWindow *gdkw = gtk_widget_get_window(ctx->dialog);
-    if (!GDK_IS_WINDOW(gdkw) || !gdk_window_is_visible(gdkw))
-        goto fail;
 
     seat = gdk_display_get_default_seat
         (gtk_widget_get_display(ctx->dialog));
     if (!seat)
-        goto fail;
+        return FALSE;
 
     ctx->seat = seat;
-    ret = gdk_seat_grab(seat, gdkw, GDK_SEAT_CAPABILITY_KEYBOARD,
-                        true, NULL, NULL, NULL, NULL);
-
-    /*
-     * For some reason GDK 3.22 hides the GDK window as a side effect
-     * of a failed grab. I've no idea why. But if we're going to retry
-     * the grab, then we need to unhide it again or else we'll just
-     * get GDK_GRAB_NOT_VIEWABLE on every subsequent attempt.
-     */
-    if (ret != GDK_GRAB_SUCCESS)
-        gdk_window_show(gdkw);
-
+    ret = gdk_seat_grab(seat, gtk_widget_get_window(ctx->dialog),
+                        GDK_SEAT_CAPABILITY_KEYBOARD,
+                        TRUE, NULL, NULL, NULL, NULL);
 #elif GTK_CHECK_VERSION(3,0,0)
     /*
      * And it has to be done differently again prior to GTK 3.20.
@@ -267,22 +246,22 @@ static gboolean try_grab_keyboard(gpointer vctx)
     dm = gdk_display_get_device_manager
         (gtk_widget_get_display(ctx->dialog));
     if (!dm)
-        goto fail;
+        return FALSE;
 
     pointer = gdk_device_manager_get_client_pointer(dm);
     if (!pointer)
-        goto fail;
+        return FALSE;
     keyboard = gdk_device_get_associated_device(pointer);
     if (!keyboard)
-        goto fail;
+        return FALSE;
     if (gdk_device_get_source(keyboard) != GDK_SOURCE_KEYBOARD)
-        goto fail;
+        return FALSE;
 
     ctx->keyboard = keyboard;
     ret = gdk_device_grab(ctx->keyboard,
                           gtk_widget_get_window(ctx->dialog),
                           GDK_OWNERSHIP_NONE,
-                          true,
+                          TRUE,
                           GDK_KEY_PRESS_MASK | GDK_KEY_RELEASE_MASK,
                           NULL,
                           GDK_CURRENT_TIME);
@@ -291,83 +270,37 @@ static gboolean try_grab_keyboard(gpointer vctx)
      * It's much simpler in GTK 1 and 2!
      */
     ret = gdk_keyboard_grab(gtk_widget_get_window(ctx->dialog),
-                            false, GDK_CURRENT_TIME);
-#endif
-    if (ret != GDK_GRAB_SUCCESS)
-        goto fail;
-
-    /*
-     * Now that we've got the keyboard grab, connect up our keyboard
-     * handlers.
-     */
-#if GTK_CHECK_VERSION(2,0,0)
-    g_signal_connect(G_OBJECT(ctx->imc), "commit",
-                     G_CALLBACK(input_method_commit_event), ctx);
-#endif
-    g_signal_connect(G_OBJECT(ctx->dialog), "key_press_event",
-                     G_CALLBACK(key_event), ctx);
-    g_signal_connect(G_OBJECT(ctx->dialog), "key_release_event",
-                     G_CALLBACK(key_event), ctx);
-#if GTK_CHECK_VERSION(2,0,0)
-    gtk_im_context_set_client_window(ctx->imc,
-                                     gtk_widget_get_window(ctx->dialog));
+                            FALSE, GDK_CURRENT_TIME);
 #endif
 
-    /*
-     * And repaint the key-acknowledgment drawing areas as not greyed
-     * out.
-     */
-    ctx->active_area = rand() % N_DRAWING_AREAS;
-    for (i = 0; i < N_DRAWING_AREAS; i++) {
-        ctx->drawingareas[i].state =
-            (i == ctx->active_area ? CURRENT : NOT_CURRENT);
-        gtk_widget_queue_draw(ctx->drawingareas[i].area);
-    }
-
-    return false;
-
-  fail:
-    /*
-     * If we didn't get the grab, reschedule ourself on a timer to try
-     * again later.
-     *
-     * We have to do this rather than just trying once, because there
-     * is at least one important situation in which the grab may fail
-     * the first time: any user who is launching an add-key operation
-     * off some kind of window manager hotkey will almost by
-     * definition be running this script with a keyboard grab already
-     * active, namely the one-key grab that the WM (or whatever) uses
-     * to detect presses of the hotkey. So at the very least we have
-     * to give the user time to release that key.
-     */
-    if (++ctx->nattempts >= 4) {
-        smemclr(ctx->passphrase, ctx->passsize);
-        ctx->passphrase = NULL;
-        ctx->error_message = dupstr("unable to grab keyboard after 5 seconds");
-        gtk_main_quit();
-    } else {
-        g_timeout_add(1000/8, try_grab_keyboard, ctx);
-    }
-    return false;
+    return ret == GDK_GRAB_SUCCESS;
 }
 
-void realize(GtkWidget *widget, gpointer vctx)
+typedef int (try_grab_fn_t)(struct askpass_ctx *ctx);
+
+static int repeatedly_try_grab(struct askpass_ctx *ctx, try_grab_fn_t fn)
 {
-    struct askpass_ctx *ctx = (struct askpass_ctx *)vctx;
-
-    gtk_grab_add(ctx->dialog);
-
     /*
-     * Schedule the first attempt at the keyboard grab.
+     * Repeatedly try to grab some aspect of the X server. We have to
+     * do this rather than just trying once, because there is at least
+     * one important situation in which the grab may fail the first
+     * time: any user who is launching an add-key operation off some
+     * kind of window manager hotkey will almost by definition be
+     * running this script with a keyboard grab already active, namely
+     * the one-key grab that the WM (or whatever) uses to detect
+     * presses of the hotkey. So at the very least we have to give the
+     * user time to release that key.
      */
-    ctx->nattempts = 0;
-#if GTK_CHECK_VERSION(3,20,0)
-    ctx->seat = NULL;
-#elif GTK_CHECK_VERSION(3,0,0)
-    ctx->keyboard = NULL;
-#endif
+    const useconds_t ms_limit = 5*1000000;  /* try for 5 seconds */
+    const useconds_t ms_step = 1000000/8;   /* at 1/8 second intervals */
+    useconds_t ms;
 
-    g_idle_add(try_grab_keyboard, ctx);
+    for (ms = 0; ms < ms_limit; ms += ms_step) {
+        if (fn(ctx))
+            return TRUE;
+        usleep(ms_step);
+    }
+    return FALSE;
 }
 
 static const char *gtk_askpass_setup(struct askpass_ctx *ctx,
@@ -390,12 +323,12 @@ static const char *gtk_askpass_setup(struct askpass_ctx *ctx,
     ctx->promptlabel = gtk_label_new(prompt_text);
     align_label_left(GTK_LABEL(ctx->promptlabel));
     gtk_widget_show(ctx->promptlabel);
-    gtk_label_set_line_wrap(GTK_LABEL(ctx->promptlabel), true);
+    gtk_label_set_line_wrap(GTK_LABEL(ctx->promptlabel), TRUE);
 #if GTK_CHECK_VERSION(3,0,0)
     gtk_label_set_width_chars(GTK_LABEL(ctx->promptlabel), 48);
 #endif
     our_dialog_add_to_content_area(GTK_WINDOW(ctx->dialog),
-                                   ctx->promptlabel, true, true, 0);
+                                   ctx->promptlabel, TRUE, TRUE, 0);
 #if GTK_CHECK_VERSION(2,0,0)
     ctx->imc = gtk_im_multicontext_new();
 #endif
@@ -405,10 +338,9 @@ static const char *gtk_askpass_setup(struct askpass_ctx *ctx,
         ctx->colmap = gdk_colormap_get_system();
         ctx->cols[0].red = ctx->cols[0].green = ctx->cols[0].blue = 0xFFFF;
         ctx->cols[1].red = ctx->cols[1].green = ctx->cols[1].blue = 0;
-        ctx->cols[2].red = ctx->cols[2].green = ctx->cols[2].blue = 0x8000;
         gdk_colormap_alloc_colors(ctx->colmap, ctx->cols, 2,
-                                  false, true, success);
-        if (!success[0] || !success[1])
+                                  FALSE, TRUE, success);
+        if (!success[0] | !success[1])
             return "unable to allocate colours";
     }
 #endif
@@ -420,14 +352,14 @@ static const char *gtk_askpass_setup(struct askpass_ctx *ctx,
 #ifndef DRAW_DEFAULT_CAIRO
         ctx->drawingareas[i].cols = ctx->cols;
 #endif
-        ctx->drawingareas[i].state = GREYED_OUT;
+        ctx->drawingareas[i].current = 0;
         ctx->drawingareas[i].width = ctx->drawingareas[i].height = 0;
         /* It would be nice to choose this size in some more
          * context-sensitive way, like measuring the size of some
          * piece of template text. */
         gtk_widget_set_size_request(ctx->drawingareas[i].area, 32, 32);
         gtk_box_pack_end(action_area, ctx->drawingareas[i].area,
-                         true, true, 5);
+                         TRUE, TRUE, 5);
         g_signal_connect(G_OBJECT(ctx->drawingareas[i].area),
                          "configure_event",
                          G_CALLBACK(configure_area),
@@ -451,7 +383,8 @@ static const char *gtk_askpass_setup(struct askpass_ctx *ctx,
 
         gtk_widget_show(ctx->drawingareas[i].area);
     }
-    ctx->active_area = -1;
+    ctx->active_area = rand() % N_DRAWING_AREAS;
+    ctx->drawingareas[ctx->active_area].current = 1;
 
     /*
      * Arrange to receive key events. We don't really need to worry
@@ -460,23 +393,40 @@ static const char *gtk_askpass_setup(struct askpass_ctx *ctx,
      * the prompt label at random, and we'll use gtk_grab_add to
      * ensure key events go to it.
      */
-    gtk_widget_set_sensitive(ctx->dialog, true);
+    gtk_widget_set_sensitive(ctx->promptlabel, TRUE);
 
 #if GTK_CHECK_VERSION(2,0,0)
-    gtk_window_set_keep_above(GTK_WINDOW(ctx->dialog), true);
+    gtk_window_set_keep_above(GTK_WINDOW(ctx->dialog), TRUE);
 #endif
 
     /*
-     * Wait for the key-receiving widget to actually be created, in
-     * order to call gtk_grab_add on it.
+     * Actually show the window, and wait for it to be shown.
      */
-    g_signal_connect(G_OBJECT(ctx->dialog), "realize",
-                     G_CALLBACK(realize), ctx);
+    gtk_widget_show_now(ctx->dialog);
 
     /*
-     * Show the window.
+     * Now that the window is displayed, make it grab the input focus.
      */
-    gtk_widget_show(ctx->dialog);
+    gtk_grab_add(ctx->promptlabel);
+    if (!repeatedly_try_grab(ctx, try_grab_keyboard))
+        return "unable to grab keyboard";
+
+    /*
+     * And now that we've got the keyboard grab, connect up our
+     * keyboard handlers.
+     */
+#if GTK_CHECK_VERSION(2,0,0)
+    g_signal_connect(G_OBJECT(ctx->imc), "commit",
+                     G_CALLBACK(input_method_commit_event), ctx);
+#endif
+    g_signal_connect(G_OBJECT(ctx->promptlabel), "key_press_event",
+                     G_CALLBACK(key_event), ctx);
+    g_signal_connect(G_OBJECT(ctx->promptlabel), "key_release_event",
+                     G_CALLBACK(key_event), ctx);
+#if GTK_CHECK_VERSION(2,0,0)
+    gtk_im_context_set_client_window(ctx->imc,
+                                     gtk_widget_get_window(ctx->dialog));
+#endif
 
     return NULL;
 }
@@ -484,11 +434,9 @@ static const char *gtk_askpass_setup(struct askpass_ctx *ctx,
 static void gtk_askpass_cleanup(struct askpass_ctx *ctx)
 {
 #if GTK_CHECK_VERSION(3,20,0)
-    if (ctx->seat)
-        gdk_seat_ungrab(ctx->seat);
+    gdk_seat_ungrab(ctx->seat);
 #elif GTK_CHECK_VERSION(3,0,0)
-    if (ctx->keyboard)
-        gdk_device_ungrab(ctx->keyboard, GDK_CURRENT_TIME);
+    gdk_device_ungrab(ctx->keyboard, GDK_CURRENT_TIME);
 #else
     gdk_keyboard_ungrab(GDK_CURRENT_TIME);
 #endif
@@ -502,16 +450,16 @@ static void gtk_askpass_cleanup(struct askpass_ctx *ctx)
     gtk_widget_destroy(ctx->dialog);
 }
 
-static bool setup_gtk(const char *display)
+static int setup_gtk(const char *display)
 {
-    static bool gtk_initialised = false;
+    static int gtk_initialised = FALSE;
     int argc;
     char *real_argv[3];
     char **argv = real_argv;
-    bool ret;
+    int ret;
 
     if (gtk_initialised)
-        return true;
+        return TRUE;
 
     argc = 0;
     argv[argc++] = dupstr("dummy");
@@ -525,36 +473,33 @@ static bool setup_gtk(const char *display)
     return ret;
 }
 
-const bool buildinfo_gtk_relevant = true;
+const int buildinfo_gtk_relevant = TRUE;
 
 char *gtk_askpass_main(const char *display, const char *wintitle,
-                       const char *prompt, bool *success)
+                       const char *prompt, int *success)
 {
     struct askpass_ctx actx, *ctx = &actx;
     const char *err;
 
-    ctx->passphrase = NULL;
-    ctx->error_message = NULL;
-
     /* In case gtk_init hasn't been called yet by the program */
     if (!setup_gtk(display)) {
-        *success = false;
+        *success = FALSE;
         return dupstr("unable to initialise GTK");
     }
 
     if ((err = gtk_askpass_setup(ctx, wintitle, prompt)) != NULL) {
-        *success = false;
+        *success = FALSE;
         return dupprintf("%s", err);
     }
     gtk_main();
     gtk_askpass_cleanup(ctx);
 
     if (ctx->passphrase) {
-        *success = true;
+        *success = TRUE;
         return ctx->passphrase;
     } else {
-        *success = false;
-        return ctx->error_message;
+        *success = FALSE;
+        return dupstr("passphrase input cancelled");
     }
 }
 
@@ -572,14 +517,13 @@ void modalfatalbox(const char *p, ...)
 
 int main(int argc, char **argv)
 {
-    bool success;
-    int exitcode;
+    int success, exitcode;
     char *ret;
 
     gtk_init(&argc, &argv);
 
     if (argc != 2) {
-        success = false;
+        success = FALSE;
         ret = dupprintf("usage: %s <prompt text>", argv[0]);
     } else {
         srand(time(NULL));

@@ -4,8 +4,8 @@
  * reads.
  */
 
-#ifndef CYGTERMD_SEL_H
-#define CYGTERMD_SEL_H
+#ifndef FIXME_SEL_H
+#define FIXME_SEL_H
 
 typedef struct sel sel;
 typedef struct sel_wfd sel_wfd;
@@ -158,4 +158,4 @@ void sel_wfd_setfd(sel_wfd *wfd, int fd);
  */
 void sel_rfd_setfd(sel_rfd *rfd, int fd);
 
-#endif /* CYGTERMD_SEL_H */
+#endif /* FIXME_SEL_H */

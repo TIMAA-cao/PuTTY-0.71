@@ -58,12 +58,12 @@ const char *filename_to_str(const Filename *fn)
     return fn->path;
 }
 
-bool filename_equal(const Filename *f1, const Filename *f2)
+int filename_equal(const Filename *f1, const Filename *f2)
 {
     return !strcmp(f1->path, f2->path);
 }
 
-bool filename_is_null(const Filename *fn)
+int filename_is_null(const Filename *fn)
 {
     return !fn->path[0];
 }
@@ -74,13 +74,25 @@ void filename_free(Filename *fn)
     sfree(fn);
 }
 
-void filename_serialise(BinarySink *bs, const Filename *f)
+int filename_serialise(const Filename *f, void *vdata)
 {
-    put_asciz(bs, f->path);
+    char *data = (char *)vdata;
+    int len = strlen(f->path) + 1;     /* include trailing NUL */
+    if (data) {
+        strcpy(data, f->path);
+    }
+    return len;
 }
-Filename *filename_deserialise(BinarySource *src)
+Filename *filename_deserialise(void *vdata, int maxsize, int *used)
 {
-    return filename_from_str(get_asciz(src));
+    char *data = (char *)vdata;
+    char *end;
+    end = memchr(data, '\0', maxsize);
+    if (!end)
+        return NULL;
+    end++;
+    *used = end - data;
+    return filename_from_str(data);
 }
 
 char filename_char_sanitise(char c)
@@ -158,12 +170,12 @@ void pgp_fingerprints(void)
 	  "one. See the manual for more information.\n"
 	  "(Note: these fingerprints have nothing to do with SSH!)\n"
 	  "\n"
-	  "PuTTY Master Key as of " PGP_MASTER_KEY_YEAR
-          " (" PGP_MASTER_KEY_DETAILS "):\n"
+	  "PuTTY Master Key as of 2015 (RSA, 4096-bit):\n"
 	  "  " PGP_MASTER_KEY_FP "\n\n"
-	  "Previous Master Key (" PGP_PREV_MASTER_KEY_YEAR
-          ", " PGP_PREV_MASTER_KEY_DETAILS "):\n"
-	  "  " PGP_PREV_MASTER_KEY_FP "\n", stdout);
+	  "Original PuTTY Master Key (RSA, 1024-bit):\n"
+	  "  " PGP_RSA_MASTER_KEY_FP "\n"
+	  "Original PuTTY Master Key (DSA, 1024-bit):\n"
+	  "  " PGP_DSA_MASTER_KEY_FP "\n", stdout);
 }
 
 /*
@@ -202,7 +214,7 @@ void noncloexec(int fd) {
         exit(1);
     }
 }
-bool nonblock(int fd) {
+int nonblock(int fd) {
     int fdflags;
 
     fdflags = fcntl(fd, F_GETFL);
@@ -217,7 +229,7 @@ bool nonblock(int fd) {
 
     return fdflags & O_NONBLOCK;
 }
-bool no_nonblock(int fd) {
+int no_nonblock(int fd) {
     int fdflags;
 
     fdflags = fcntl(fd, F_GETFL);
@@ -233,7 +245,7 @@ bool no_nonblock(int fd) {
     return fdflags & O_NONBLOCK;
 }
 
-FILE *f_open(const Filename *filename, char const *mode, bool is_private)
+FILE *f_open(const Filename *filename, char const *mode, int is_private)
 {
     if (!is_private) {
 	return fopen(filename->path, mode);
@@ -263,13 +275,21 @@ void fontspec_free(FontSpec *f)
     sfree(f->name);
     sfree(f);
 }
-void fontspec_serialise(BinarySink *bs, FontSpec *f)
+int fontspec_serialise(FontSpec *f, void *data)
 {
-    put_asciz(bs, f->name);
+    int len = strlen(f->name);
+    if (data)
+        strcpy(data, f->name);
+    return len + 1;                    /* include trailing NUL */
 }
-FontSpec *fontspec_deserialise(BinarySource *src)
+FontSpec *fontspec_deserialise(void *vdata, int maxsize, int *used)
 {
-    return fontspec_new(get_asciz(src));
+    char *data = (char *)vdata;
+    char *end = memchr(data, '\0', maxsize);
+    if (!end)
+        return NULL;
+    *used = end - data + 1;
+    return fontspec_new(data);
 }
 
 char *make_dir_and_check_ours(const char *dirname)
@@ -328,40 +348,4 @@ char *make_dir_path(const char *path, mode_t mode)
             return NULL;
         pos += strspn(path + pos, "/");
     }
-}
-
-bool open_for_write_would_lose_data(const Filename *fn)
-{
-    struct stat st;
-
-    if (stat(fn->path, &st) < 0) {
-        /*
-         * If the file doesn't even exist, we obviously want to return
-         * false. If we failed to stat it for any other reason,
-         * ignoring the precise error code and returning false still
-         * doesn't seem too unreasonable, because then we'll try to
-         * open the file for writing and report _that_ error, which is
-         * likely to be more to the point.
-         */
-        return false;
-    }
-
-    /*
-     * OK, something exists at this pathname and we've found out
-     * something about it. But an open-for-write will only
-     * destructively truncate it if it's a regular file with nonzero
-     * size. If it's empty, or some other kind of special thing like a
-     * character device (e.g. /dev/tty) or a named pipe, then opening
-     * it for write is already non-destructive and it's pointless and
-     * annoying to warn about it just because the same file can be
-     * opened for reading. (Indeed, if it's a named pipe, opening it
-     * for reading actually _causes inconvenience_ in its own right,
-     * even before the question of whether it gives misleading
-     * information.)
-     */
-    if (S_ISREG(st.st_mode) && st.st_size > 0) {
-        return true;
-    }
-
-    return false;
 }

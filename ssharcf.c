@@ -9,12 +9,10 @@
 
 typedef struct {
     unsigned char i, j, s[256];
-    ssh_cipher ciph;
 } ArcfourContext;
 
-static void arcfour_block(void *handle, void *vblk, int len)
+static void arcfour_block(void *handle, unsigned char *blk, int len)
 {
-    unsigned char *blk = (unsigned char *)vblk;
     ArcfourContext *ctx = (ArcfourContext *)handle;
     unsigned k;
     unsigned char tmp, i, j, *s;
@@ -62,18 +60,14 @@ static void arcfour_setkey(ArcfourContext *ctx, unsigned char const *key,
  * to leak data about the key.
  */
 
-static ssh_cipher *arcfour_new(const ssh_cipheralg *alg)
+static void *arcfour_make_context(void)
 {
-    ArcfourContext *ctx = snew(ArcfourContext);
-    ctx->ciph.vt = alg;
-    return &ctx->ciph;
+    return snew(ArcfourContext);
 }
 
-static void arcfour_free(ssh_cipher *cipher)
+static void arcfour_free_context(void *handle)
 {
-    ArcfourContext *ctx = container_of(cipher, ArcfourContext, ciph);
-    smemclr(ctx, sizeof(*ctx));
-    sfree(ctx);
+    sfree(handle);
 }
 
 static void arcfour_stir(ArcfourContext *ctx)
@@ -85,43 +79,47 @@ static void arcfour_stir(ArcfourContext *ctx)
     sfree(junk);
 }
 
-static void arcfour_ssh2_setiv(ssh_cipher *cipher, const void *key)
+static void arcfour128_key(void *handle, unsigned char *key)
 {
-    /* As a pure stream cipher, Arcfour has no IV separate from the key */
-}
-
-static void arcfour_ssh2_setkey(ssh_cipher *cipher, const void *key)
-{
-    ArcfourContext *ctx = container_of(cipher, ArcfourContext, ciph);
-    arcfour_setkey(ctx, key, ctx->ciph.vt->padded_keybytes);
+    ArcfourContext *ctx = (ArcfourContext *)handle;
+    arcfour_setkey(ctx, key, 16);
     arcfour_stir(ctx);
 }
 
-static void arcfour_ssh2_block(ssh_cipher *cipher, void *blk, int len)
+static void arcfour256_key(void *handle, unsigned char *key)
 {
-    ArcfourContext *ctx = container_of(cipher, ArcfourContext, ciph);
-    arcfour_block(ctx, blk, len);
+    ArcfourContext *ctx = (ArcfourContext *)handle;
+    arcfour_setkey(ctx, key, 32);
+    arcfour_stir(ctx);
 }
 
-const ssh_cipheralg ssh_arcfour128_ssh2 = {
-    arcfour_new, arcfour_free, arcfour_ssh2_setiv, arcfour_ssh2_setkey,
-    arcfour_ssh2_block, arcfour_ssh2_block, NULL, NULL,
+static void arcfour_iv(void *handle, unsigned char *key)
+{
+
+}
+
+const struct ssh2_cipher ssh_arcfour128_ssh2 = {
+    arcfour_make_context, arcfour_free_context, arcfour_iv, arcfour128_key,
+    arcfour_block, arcfour_block, NULL, NULL,
     "arcfour128",
     1, 128, 16, 0, "Arcfour-128",
     NULL
 };
 
-const ssh_cipheralg ssh_arcfour256_ssh2 = {
-    arcfour_new, arcfour_free, arcfour_ssh2_setiv, arcfour_ssh2_setkey,
-    arcfour_ssh2_block, arcfour_ssh2_block, NULL, NULL,
+const struct ssh2_cipher ssh_arcfour256_ssh2 = {
+    arcfour_make_context, arcfour_free_context, arcfour_iv, arcfour256_key,
+    arcfour_block, arcfour_block, NULL, NULL,
     "arcfour256",
     1, 256, 32, 0, "Arcfour-256",
     NULL
 };
 
-static const ssh_cipheralg *const arcfour_list[] = {
+static const struct ssh2_cipher *const arcfour_list[] = {
     &ssh_arcfour256_ssh2,
     &ssh_arcfour128_ssh2,
 };
 
-const ssh2_ciphers ssh2_arcfour = { lenof(arcfour_list), arcfour_list };
+const struct ssh2_ciphers ssh2_arcfour = {
+    sizeof(arcfour_list) / sizeof(*arcfour_list),
+    arcfour_list
+};

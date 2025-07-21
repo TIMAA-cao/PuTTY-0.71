@@ -23,7 +23,6 @@
 
 #include <stdlib.h>	/* definition of wchar_t*/
 
-#include "putty.h"
 #include "misc.h"
 
 #define LMASK	0x3F	/* Embedding Level mask */
@@ -50,16 +49,20 @@ shapetypes[(xh)-SHAPE_FIRST].type : SU) /*))*/
 #define leastGreaterOdd(x) ( ((x)+1) | 1 )
 #define leastGreaterEven(x) ( ((x)+2) &~ 1 )
 
+typedef struct bidi_char {
+    unsigned int origwc, wc;
+    unsigned short index;
+} bidi_char;
+
 /* function declarations */
-static void flipThisRun(
-    bidi_char *from, unsigned char *level, int max, int count);
-static int findIndexOfRun(
-    unsigned char *level, int start, int count, int tlevel);
-static unsigned char getType(int ch);
-static unsigned char setOverrideBits(
-    unsigned char level, unsigned char override);
-static int getPreviousLevel(unsigned char *level, int from);
-static void doMirror(unsigned int *ch);
+void flipThisRun(bidi_char *from, unsigned char* level, int max, int count);
+int findIndexOfRun(unsigned char* level , int start, int count, int tlevel);
+unsigned char getType(int ch);
+unsigned char setOverrideBits(unsigned char level, unsigned char override);
+int getPreviousLevel(unsigned char* level, int from);
+int do_shape(bidi_char *line, bidi_char *to, int count);
+int do_bidi(bidi_char *line, int count);
+void doMirror(unsigned int *ch);
 
 /* character types */
 enum {
@@ -294,8 +297,7 @@ const shape_node shapetypes[] = {
  * max: the maximum level found in this line (should be unsigned char)
  * count: line size in bidi_char
  */
-static void flipThisRun(
-    bidi_char *from, unsigned char *level, int max, int count)
+void flipThisRun(bidi_char *from, unsigned char *level, int max, int count)
 {
     int i, j, k, tlevel;
     bidi_char temp;
@@ -321,8 +323,7 @@ static void flipThisRun(
 /*
  * Finds the index of a run with level equals tlevel
  */
-static int findIndexOfRun(
-    unsigned char *level , int start, int count, int tlevel)
+int findIndexOfRun(unsigned char* level , int start, int count, int tlevel)
 {
     int i;
     for (i=start; i<count; i++) {
@@ -354,7 +355,7 @@ perl -ne 'split ";"; $num = hex $_[0]; $type = $_[4];' \
     UnicodeData.txt
 
  */
-static unsigned char getType(int ch)
+unsigned char getType(int ch)
 {
     static const struct {
 	int first, last, type;
@@ -865,8 +866,7 @@ static unsigned char getType(int ch)
         {0x4e00, 0x9fa5, L},
         {0xa000, 0xa48c, L},
         {0xac00, 0xd7a3, L},
-        {0xd800, 0xdff7, L},
-        {0xe000, 0xfa2d, L},
+        {0xd800, 0xfa2d, L},
         {0xfa30, 0xfa6a, L},
         {0xfb00, 0xfb06, L},
         {0xfb13, 0xfb17, L},
@@ -1024,7 +1024,7 @@ static unsigned char getType(int ch)
  * important because all such characters are right-to-left so it
  * would have flagged them anyway.)
  */
-bool is_rtl(int c)
+int is_rtl(int c)
 {
     /*
      * After careful reading of the Unicode bidi algorithm (URL as
@@ -1045,8 +1045,7 @@ bool is_rtl(int c)
  * This function sets the override bits of level according
  * to the value in override, and reurns the new byte.
  */
-static unsigned char setOverrideBits(
-    unsigned char level, unsigned char override)
+unsigned char setOverrideBits(unsigned char level, unsigned char override)
 {
     if (override == ON)
 	return level;
@@ -1062,7 +1061,7 @@ static unsigned char setOverrideBits(
  * return the value _before_ it. Used to process U+202C POP
  * DIRECTIONAL FORMATTING.
  */
-static int getPreviousLevel(unsigned char *level, int from)
+int getPreviousLevel(unsigned char* level, int from)
 {
     if (from > 0) {
         unsigned char current = level[--from];
@@ -1087,10 +1086,9 @@ static int getPreviousLevel(unsigned char *level, int from)
  */
 int do_shape(bidi_char *line, bidi_char *to, int count)
 {
-    int i, tempShape;
-    bool ligFlag = false;
+    int i, tempShape, ligFlag;
 
-    for (i=0; i<count; i++) {
+    for (ligFlag=i=0; i<count; i++) {
 	to[i] = line[i];
 	tempShape = STYPE(line[i].wc);
 	switch (tempShape) {
@@ -1115,28 +1113,28 @@ int do_shape(bidi_char *line, bidi_char *to, int count)
 	    if (line[i].wc == 0x644) {
 		if (i > 0) switch (line[i-1].wc) {
 		  case 0x622:
-		    ligFlag = true;
+		    ligFlag = 1;
 		    if ((tempShape == SL) || (tempShape == SD) || (tempShape == SC))
 			to[i].wc = 0xFEF6;
 		    else
 			to[i].wc = 0xFEF5;
 		    break;
 		  case 0x623:
-		    ligFlag = true;
+		    ligFlag = 1;
 		    if ((tempShape == SL) || (tempShape == SD) || (tempShape == SC))
 			to[i].wc = 0xFEF8;
 		    else
 			to[i].wc = 0xFEF7;
 		    break;
 		  case 0x625:
-		    ligFlag = true;
+		    ligFlag = 1;
 		    if ((tempShape == SL) || (tempShape == SD) || (tempShape == SC))
 			to[i].wc = 0xFEFA;
 		    else
 			to[i].wc = 0xFEF9;
 		    break;
 		  case 0x627:
-		    ligFlag = true;
+		    ligFlag = 1;
 		    if ((tempShape == SL) || (tempShape == SD) || (tempShape == SC))
 			to[i].wc = 0xFEFC;
 		    else
@@ -1145,7 +1143,7 @@ int do_shape(bidi_char *line, bidi_char *to, int count)
 		}
 		if (ligFlag) {
 		    to[i-1].wc = 0x20;
-		    ligFlag = false;
+		    ligFlag = 0;
 		    break;
 		}
 	    }
@@ -1188,19 +1186,18 @@ int do_bidi(bidi_char *line, int count)
     unsigned char currentEmbedding;
     unsigned char currentOverride;
     unsigned char tempType;
-    int i, j;
-    bool yes, bover;
+    int i, j, yes, bover;
 
     /* Check the presence of R or AL types as optimization */
-    yes = false;
+    yes = 0;
     for (i=0; i<count; i++) {
 	int type = getType(line[i].wc);
 	if (type == R || type == AL) {
-	    yes = true;
+	    yes = 1;
 	    break;
 	}
     }
-    if (!yes)
+    if (yes == 0)
 	return L;
 
     /* Initialize types, levels */
@@ -1253,7 +1250,7 @@ int do_bidi(bidi_char *line, int count)
      * terminated at the end of each paragraph. Paragraph separators are not
      * included in the embedding. (Useless here) NOT IMPLEMENTED
      */
-    bover = false;
+    bover = 0;
     for (i=0; i<count; i++) {
 	tempType = getType(line[i].wc);
 	switch (tempType) {
@@ -1272,13 +1269,13 @@ int do_bidi(bidi_char *line, int count)
 	  case RLO:
 	    currentEmbedding = levels[i] = leastGreaterOdd(currentEmbedding);
 	    tempType = currentOverride = R;
-	    bover = true;
+	    bover = 1;
 	    break;
 
 	  case LRO:
 	    currentEmbedding = levels[i] = leastGreaterEven(currentEmbedding);
 	    tempType = currentOverride = L;
-	    bover = true;
+	    bover = 1;
 	    break;
 
 	  case PDF:
@@ -1416,7 +1413,7 @@ int do_bidi(bidi_char *line, int count)
                 continue;
             } else if (i < count-1 && types[i+1] == ET) {
                 j=i;
-                while (j < count-1 && types[j] == ET) {
+                while (j <count && types[j] == ET) {
                     j++;
                 }
                 if (types[j] == EN)
@@ -1631,7 +1628,7 @@ int do_bidi(bidi_char *line, int count)
  * takes a pointer to a character that is checked for
  * having a mirror glyph.
  */
-static void doMirror(unsigned int *ch)
+void doMirror(unsigned int *ch)
 {
     if ((*ch & 0xFF00) == 0) {
 	switch (*ch) {

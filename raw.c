@@ -8,40 +8,45 @@
 
 #include "putty.h"
 
+#ifndef FALSE
+#define FALSE 0
+#endif
+#ifndef TRUE
+#define TRUE 1
+#endif
+
 #define RAW_MAX_BACKLOG 4096
 
-typedef struct Raw Raw;
-struct Raw {
-    Socket *s;
-    bool closed_on_socket_error;
-    size_t bufsize;
-    Seat *seat;
-    LogContext *logctx;
-    bool sent_console_eof, sent_socket_eof, session_started;
+typedef struct raw_backend_data {
+    const struct plug_function_table *fn;
+    /* the above field _must_ be first in the structure */
+
+    Socket s;
+    int closed_on_socket_error;
+    int bufsize;
+    void *frontend;
+    int sent_console_eof, sent_socket_eof, session_started;
 
     Conf *conf;
+} *Raw;
 
-    Plug plug;
-    Backend backend;
-};
+static void raw_size(void *handle, int width, int height);
 
-static void raw_size(Backend *be, int width, int height);
-
-static void c_write(Raw *raw, const void *buf, size_t len)
+static void c_write(Raw raw, char *buf, int len)
 {
-    size_t backlog = seat_stdout(raw->seat, buf, len);
+    int backlog = from_backend(raw->frontend, 0, buf, len);
     sk_set_frozen(raw->s, backlog > RAW_MAX_BACKLOG);
 }
 
-static void raw_log(Plug *plug, int type, SockAddr *addr, int port,
+static void raw_log(Plug plug, int type, SockAddr addr, int port,
 		    const char *error_msg, int error_code)
 {
-    Raw *raw = container_of(plug, Raw, plug);
-    backend_socket_log(raw->seat, raw->logctx, type, addr, port,
+    Raw raw = (Raw) plug;
+    backend_socket_log(raw->frontend, type, addr, port,
                        error_msg, error_code, raw->conf, raw->session_started);
 }
 
-static void raw_check_close(Raw *raw)
+static void raw_check_close(Raw raw)
 {
     /*
      * Called after we send EOF on either the socket or the console.
@@ -51,29 +56,29 @@ static void raw_check_close(Raw *raw)
         if (raw->s) {
             sk_close(raw->s);
             raw->s = NULL;
-            seat_notify_remote_exit(raw->seat);
+            notify_remote_exit(raw->frontend);
         }
     }
 }
 
-static void raw_closing(Plug *plug, const char *error_msg, int error_code,
-			bool calling_back)
+static void raw_closing(Plug plug, const char *error_msg, int error_code,
+			int calling_back)
 {
-    Raw *raw = container_of(plug, Raw, plug);
+    Raw raw = (Raw) plug;
 
     if (error_msg) {
         /* A socket error has occurred. */
         if (raw->s) {
             sk_close(raw->s);
             raw->s = NULL;
-            raw->closed_on_socket_error = true;
-            seat_notify_remote_exit(raw->seat);
+            raw->closed_on_socket_error = TRUE;
+            notify_remote_exit(raw->frontend);
         }
-        logevent(raw->logctx, error_msg);
-        seat_connection_fatal(raw->seat, "%s", error_msg);
+        logevent(raw->frontend, error_msg);
+        connection_fatal(raw->frontend, "%s", error_msg);
     } else {
         /* Otherwise, the remote side closed the connection normally. */
-        if (!raw->sent_console_eof && seat_eof(raw->seat)) {
+        if (!raw->sent_console_eof && from_backend_eof(raw->frontend)) {
             /*
              * The front end wants us to close the outgoing side of the
              * connection as soon as we see EOF from the far end.
@@ -81,35 +86,28 @@ static void raw_closing(Plug *plug, const char *error_msg, int error_code,
             if (!raw->sent_socket_eof) {
                 if (raw->s)
                     sk_write_eof(raw->s);
-                raw->sent_socket_eof= true;
+                raw->sent_socket_eof= TRUE;
             }
         }
-        raw->sent_console_eof = true;
+        raw->sent_console_eof = TRUE;
         raw_check_close(raw);
     }
 }
 
-static void raw_receive(Plug *plug, int urgent, const char *data, size_t len)
+static void raw_receive(Plug plug, int urgent, char *data, int len)
 {
-    Raw *raw = container_of(plug, Raw, plug);
+    Raw raw = (Raw) plug;
     c_write(raw, data, len);
     /* We count 'session start', for proxy logging purposes, as being
      * when data is received from the network and printed. */
-    raw->session_started = true;
+    raw->session_started = TRUE;
 }
 
-static void raw_sent(Plug *plug, size_t bufsize)
+static void raw_sent(Plug plug, int bufsize)
 {
-    Raw *raw = container_of(plug, Raw, plug);
+    Raw raw = (Raw) plug;
     raw->bufsize = bufsize;
 }
-
-static const PlugVtable Raw_plugvt = {
-    raw_log,
-    raw_closing,
-    raw_receive,
-    raw_sent
-};
 
 /*
  * Called to set up the raw connection.
@@ -119,40 +117,41 @@ static const PlugVtable Raw_plugvt = {
  * Also places the canonical host name into `realhost'. It must be
  * freed by the caller.
  */
-static const char *raw_init(Seat *seat, Backend **backend_handle,
-                            LogContext *logctx, Conf *conf,
+static const char *raw_init(void *frontend_handle, void **backend_handle,
+			    Conf *conf,
 			    const char *host, int port, char **realhost,
-                            bool nodelay, bool keepalive)
+                            int nodelay, int keepalive)
 {
-    SockAddr *addr;
+    static const struct plug_function_table fn_table = {
+	raw_log,
+	raw_closing,
+	raw_receive,
+	raw_sent
+    };
+    SockAddr addr;
     const char *err;
-    Raw *raw;
+    Raw raw;
     int addressfamily;
     char *loghost;
 
-    /* No local authentication phase in this protocol */
-    seat_set_trust_status(seat, false);
-
-    raw = snew(Raw);
-    raw->plug.vt = &Raw_plugvt;
-    raw->backend.vt = &raw_backend;
+    raw = snew(struct raw_backend_data);
+    raw->fn = &fn_table;
     raw->s = NULL;
-    raw->closed_on_socket_error = false;
-    *backend_handle = &raw->backend;
-    raw->sent_console_eof = raw->sent_socket_eof = false;
+    raw->closed_on_socket_error = FALSE;
+    *backend_handle = raw;
+    raw->sent_console_eof = raw->sent_socket_eof = FALSE;
     raw->bufsize = 0;
-    raw->session_started = false;
+    raw->session_started = FALSE;
     raw->conf = conf_copy(conf);
 
-    raw->seat = seat;
-    raw->logctx = logctx;
+    raw->frontend = frontend_handle;
 
     addressfamily = conf_get_int(conf, CONF_addressfamily);
     /*
      * Try to find host.
      */
     addr = name_lookup(host, port, realhost, conf, addressfamily,
-                       raw->logctx, "main connection");
+                       raw->frontend, "main connection");
     if ((err = sk_addr_error(addr)) != NULL) {
 	sk_addr_free(addr);
 	return err;
@@ -164,8 +163,8 @@ static const char *raw_init(Seat *seat, Backend **backend_handle,
     /*
      * Open socket.
      */
-    raw->s = new_connection(addr, *realhost, port, false, true, nodelay,
-                            keepalive, &raw->plug, conf);
+    raw->s = new_connection(addr, *realhost, port, 0, 1, nodelay, keepalive,
+			    (Plug) raw, conf);
     if ((err = sk_socket_error(raw->s)) != NULL)
 	return err;
 
@@ -184,9 +183,9 @@ static const char *raw_init(Seat *seat, Backend **backend_handle,
     return NULL;
 }
 
-static void raw_free(Backend *be)
+static void raw_free(void *handle)
 {
-    Raw *raw = container_of(be, Raw, backend);
+    Raw raw = (Raw) handle;
 
     if (raw->s)
 	sk_close(raw->s);
@@ -197,16 +196,16 @@ static void raw_free(Backend *be)
 /*
  * Stub routine (we don't have any need to reconfigure this backend).
  */
-static void raw_reconfig(Backend *be, Conf *conf)
+static void raw_reconfig(void *handle, Conf *conf)
 {
 }
 
 /*
  * Called to send data down the raw connection.
  */
-static size_t raw_send(Backend *be, const char *buf, size_t len)
+static int raw_send(void *handle, const char *buf, int len)
 {
-    Raw *raw = container_of(be, Raw, backend);
+    Raw raw = (Raw) handle;
 
     if (raw->s == NULL)
 	return 0;
@@ -219,16 +218,16 @@ static size_t raw_send(Backend *be, const char *buf, size_t len)
 /*
  * Called to query the current socket sendability status.
  */
-static size_t raw_sendbuffer(Backend *be)
+static int raw_sendbuffer(void *handle)
 {
-    Raw *raw = container_of(be, Raw, backend);
+    Raw raw = (Raw) handle;
     return raw->bufsize;
 }
 
 /*
  * Called to set the size of the window
  */
-static void raw_size(Backend *be, int width, int height)
+static void raw_size(void *handle, int width, int height)
 {
     /* Do nothing! */
     return;
@@ -237,12 +236,12 @@ static void raw_size(Backend *be, int width, int height)
 /*
  * Send raw special codes. We only handle outgoing EOF here.
  */
-static void raw_special(Backend *be, SessionSpecialCode code, int arg)
+static void raw_special(void *handle, Telnet_Special code)
 {
-    Raw *raw = container_of(be, Raw, backend);
-    if (code == SS_EOF && raw->s) {
+    Raw raw = (Raw) handle;
+    if (code == TS_EOF && raw->s) {
         sk_write_eof(raw->s);
-        raw->sent_socket_eof= true;
+        raw->sent_socket_eof= TRUE;
         raw_check_close(raw);
     }
 
@@ -253,43 +252,48 @@ static void raw_special(Backend *be, SessionSpecialCode code, int arg)
  * Return a list of the special codes that make sense in this
  * protocol.
  */
-static const SessionSpecial *raw_get_specials(Backend *be)
+static const struct telnet_special *raw_get_specials(void *handle)
 {
     return NULL;
 }
 
-static bool raw_connected(Backend *be)
+static int raw_connected(void *handle)
 {
-    Raw *raw = container_of(be, Raw, backend);
+    Raw raw = (Raw) handle;
     return raw->s != NULL;
 }
 
-static bool raw_sendok(Backend *be)
+static int raw_sendok(void *handle)
 {
-    return true;
+    return 1;
 }
 
-static void raw_unthrottle(Backend *be, size_t backlog)
+static void raw_unthrottle(void *handle, int backlog)
 {
-    Raw *raw = container_of(be, Raw, backend);
+    Raw raw = (Raw) handle;
     sk_set_frozen(raw->s, backlog > RAW_MAX_BACKLOG);
 }
 
-static bool raw_ldisc(Backend *be, int option)
+static int raw_ldisc(void *handle, int option)
 {
     if (option == LD_EDIT || option == LD_ECHO)
-	return true;
-    return false;
+	return 1;
+    return 0;
 }
 
-static void raw_provide_ldisc(Backend *be, Ldisc *ldisc)
+static void raw_provide_ldisc(void *handle, void *ldisc)
 {
     /* This is a stub. */
 }
 
-static int raw_exitcode(Backend *be)
+static void raw_provide_logctx(void *handle, void *logctx)
 {
-    Raw *raw = container_of(be, Raw, backend);
+    /* This is a stub. */
+}
+
+static int raw_exitcode(void *handle)
+{
+    Raw raw = (Raw) handle;
     if (raw->s != NULL)
         return -1;                     /* still connected */
     else if (raw->closed_on_socket_error)
@@ -302,12 +306,12 @@ static int raw_exitcode(Backend *be)
 /*
  * cfg_info for Raw does nothing at all.
  */
-static int raw_cfg_info(Backend *be)
+static int raw_cfg_info(void *handle)
 {
     return 0;
 }
 
-const struct BackendVtable raw_backend = {
+Backend raw_backend = {
     raw_init,
     raw_free,
     raw_reconfig,
@@ -321,6 +325,7 @@ const struct BackendVtable raw_backend = {
     raw_sendok,
     raw_ldisc,
     raw_provide_ldisc,
+    raw_provide_logctx,
     raw_unthrottle,
     raw_cfg_info,
     NULL /* test_for_upstream */,

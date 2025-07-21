@@ -15,13 +15,11 @@ my $setver = 0;
 my $upload = 0;
 my $precheck = 0;
 my $postcheck = 0;
-my $skip_ftp = 0;
 GetOptions("version=s" => \$version,
            "setver" => \$setver,
            "upload" => \$upload,
            "precheck" => \$precheck,
-           "postcheck" => \$postcheck,
-           "no-ftp" => \$skip_ftp)
+           "postcheck" => \$postcheck)
     or &usage();
 
 # --set-version: construct a local commit which updates the version
@@ -31,6 +29,7 @@ if ($setver) {
     0 == system "git", "diff-index", "--quiet", "--cached", "HEAD"
         or die "index is dirty";
     0 == system "git", "diff-files", "--quiet" or die "working tree is dirty";
+    -f "Makefile" and die "run 'make distclean' first";
     my $builddir = tempdir(DIR => ".", CLEANUP => 1);
     0 == system "git archive --format=tar HEAD | ( cd $builddir && tar xf - )"
         or die;
@@ -165,13 +164,11 @@ if ($precheck || $postcheck) {
                    }
 
                    # Now test-download the files themselves.
-                   unless ($skip_ftp) {
-                       my $ftpdata = `curl -s $ftp_uri`;
-                       printf "  got %d bytes via FTP", length $ftpdata;
-                       die "FTP download for $ftp_uri did not match"
-                           if $ftpdata ne $real_content;
-                       print ", ok\n";
-                   }
+                   my $ftpdata = `curl -s $ftp_uri`;
+                   printf "  got %d bytes via FTP", length $ftpdata;
+                   die "FTP download for $ftp_uri did not match"
+                       if $ftpdata ne $real_content;
+                   print ", ok\n";
 
                    my $ua = LWP::UserAgent->new;
                    my $httpresponse = $ua->get($http_uri);

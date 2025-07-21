@@ -32,7 +32,7 @@ DECL_WINDOWS_FUNCTION(static, BOOL, WritePrinter,
 
 static void init_winfuncs(void)
 {
-    static bool initialised = false;
+    static int initialised = FALSE;
     if (initialised)
         return;
     {
@@ -53,11 +53,11 @@ static void init_winfuncs(void)
         GET_WINDOWS_FUNCTION_PP(winspool_module, EndPagePrinter);
         GET_WINDOWS_FUNCTION_PP(winspool_module, WritePrinter);
     }
-    initialised = true;
+    initialised = TRUE;
 }
 
-static bool printer_add_enum(int param, DWORD level, char **buffer,
-                             int offset, int *nprinters_ptr)
+static int printer_add_enum(int param, DWORD level, char **buffer,
+                            int offset, int *nprinters_ptr)
 {
     DWORD needed = 0, nprinters = 0;
 
@@ -80,11 +80,11 @@ static bool printer_add_enum(int param, DWORD level, char **buffer,
 
     if (p_EnumPrinters(param, NULL, level, (LPBYTE)((*buffer)+offset),
                        needed, &needed, &nprinters) == 0)
-        return false;
+        return FALSE;
 
     *nprinters_ptr += nprinters;
 
-    return true;
+    return TRUE;
 }
 
 printer_enum *printer_start_enum(int *nprinters_ptr)
@@ -105,7 +105,7 @@ printer_enum *printer_start_enum(int *nprinters_ptr)
      * PRINTER_INFO_5 is recommended.
      * Bletch.
      */
-    if (osPlatformId != VER_PLATFORM_WIN32_NT) {
+    if (osVersion.dwPlatformId != VER_PLATFORM_WIN32_NT) {
 	ret->enum_level = 5;
     } else {
 	ret->enum_level = 4;
@@ -169,7 +169,7 @@ printer_job *printer_start_job(char *printer)
 {
     printer_job *ret = snew(printer_job);
     DOC_INFO_1 docinfo;
-    bool jobstarted = false, pagestarted = false;
+    int jobstarted = 0, pagestarted = 0;
 
     init_winfuncs();
 
@@ -183,11 +183,11 @@ printer_job *printer_start_job(char *printer)
 
     if (!p_StartDocPrinter(ret->hprinter, 1, (LPBYTE)&docinfo))
 	goto error;
-    jobstarted = true;
+    jobstarted = 1;
 
     if (!p_StartPagePrinter(ret->hprinter))
 	goto error;
-    pagestarted = true;
+    pagestarted = 1;
 
     return ret;
 
@@ -202,14 +202,14 @@ printer_job *printer_start_job(char *printer)
     return NULL;
 }
 
-void printer_job_data(printer_job *pj, const void *data, size_t len)
+void printer_job_data(printer_job *pj, void *data, int len)
 {
     DWORD written;
 
     if (!pj)
 	return;
 
-    p_WritePrinter(pj->hprinter, (void *)data, len, &written);
+    p_WritePrinter(pj->hprinter, data, len, &written);
 }
 
 void printer_finish_job(printer_job *pj)

@@ -34,17 +34,17 @@ struct filereq_tag {
  * save==1 -> GetSaveFileName; save==0 -> GetOpenFileName
  * `state' is optional.
  */
-bool request_file(filereq *state, OPENFILENAME *of, bool preserve, bool save)
+BOOL request_file(filereq *state, OPENFILENAME *of, int preserve, int save)
 {
     TCHAR cwd[MAX_PATH]; /* process CWD */
-    bool ret;
+    BOOL ret;
 
     /* Get process CWD */
     if (preserve) {
 	DWORD r = GetCurrentDirectory(lenof(cwd), cwd);
 	if (r == 0 || r >= lenof(cwd))
 	    /* Didn't work, oh well. Stop trying to be clever. */
-	    preserve = false;
+	    preserve = 0;
     }
 
     /* Open the file requester, maybe setting lpstrInitialDir */
@@ -142,12 +142,12 @@ void pgp_fingerprints(void)
 		"one. See the manual for more information.\n"
 		"(Note: these fingerprints have nothing to do with SSH!)\n"
 		"\n"
-                "PuTTY Master Key as of " PGP_MASTER_KEY_YEAR
-                " (" PGP_MASTER_KEY_DETAILS "):\n"
+                "PuTTY Master Key as of 2015 (RSA, 4096-bit):\n"
                 "  " PGP_MASTER_KEY_FP "\n\n"
-                "Previous Master Key (" PGP_PREV_MASTER_KEY_YEAR
-                ", " PGP_PREV_MASTER_KEY_DETAILS "):\n"
-                "  " PGP_PREV_MASTER_KEY_FP,
+                "Original PuTTY Master Key (RSA, 1024-bit):\n"
+                "  " PGP_RSA_MASTER_KEY_FP "\n"
+                "Original PuTTY Master Key (DSA, 1024-bit):\n"
+                "  " PGP_DSA_MASTER_KEY_FP,
 		"PGP fingerprints", MB_ICONINFORMATION | MB_OK,
 		HELPCTXID(pgp_fingerprints));
 }
@@ -160,10 +160,11 @@ void pgp_fingerprints(void)
 char *GetDlgItemText_alloc(HWND hwnd, int id)
 {
     char *ret = NULL;
-    size_t size = 0;
+    int size = 0;
 
     do {
-        sgrowarray(ret, size, size);
+	size = size * 4 / 3 + 512;
+	ret = sresize(ret, size, char);
 	GetDlgItemText(hwnd, id, ret, size);
     } while (!memchr(ret, '\0', size-1));
 
@@ -320,7 +321,7 @@ void split_into_argv(char *cmdline, int *argc, char ***argv,
     p = cmdline; q = outputline; outputargc = 0;
 
     while (*p) {
-	bool quote;
+	int quote;
 
 	/* Skip whitespace searching for start of argument. */
 	while (*p && isspace(*p)) p++;
@@ -330,7 +331,7 @@ void split_into_argv(char *cmdline, int *argc, char ***argv,
 	outputargv[outputargc] = q;
 	outputargstart[outputargc] = p;
 	outputargc++;
-	quote = false;
+	quote = 0;
 
 	/* Copy data into the argument until it's finished. */
 	while (*p) {
